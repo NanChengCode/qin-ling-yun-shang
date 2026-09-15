@@ -169,6 +169,60 @@
   .tips h2 { font-size: 14px; color: var(--text); margin-bottom: 6px; }
   .tips li { margin-left: 18px; }
   .tips code { background: var(--card); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; }
+
+  /* ========== 移动端适配 (窄屏 ≤768px) ========== */
+  @media (max-width: 768px) {
+    body { padding: 12px; }
+    .card { padding: 14px; margin-bottom: 12px; border-radius: 10px; }
+    header { flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+    header .logo { width: 36px; height: 36px; font-size: 17px; border-radius: 9px; }
+    header h1 { font-size: 17px; }
+    header .sub { font-size: 12px; }
+    .status-pill { font-size: 12px; padding: 5px 10px; }
+    /* 多列表单 → 单列/两列堆叠 */
+    .row2, .row3 { grid-template-columns: 1fr; gap: 8px; }
+    .row4 { grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
+    .row4 .field:first-child { grid-column: 1 / -1; }
+    .row4 .btn { grid-column: 1 / -1; width: 100%; padding: 11px 0; }
+    /* 输入字号 16px 防 iOS 聚焦自动缩放; 按钮加大触控面积 */
+    .field input[type=text], .field input[type=password], .field input[type=number],
+    .field select, .log-header select { font-size: 16px; padding: 10px; }
+    .btn { padding: 11px 16px; font-size: 14px; }
+    .btn-ghost { padding: 9px 14px; font-size: 13px; }
+    .btn-mini, .q-btn-mini { font-size: 12px; padding: 7px 10px; }
+    .actions { flex-wrap: wrap; gap: 8px; }
+    .account-header { flex-wrap: wrap; gap: 8px; }
+    .q-actions { gap: 6px; }
+    .seg label { padding: 9px 0; font-size: 13px; }
+    /* 表格 → 卡片式列表: 每行变成带字段名的小卡片, 免横向滚动 */
+    .table-wrap { max-height: none !important; overflow: visible; border: none; background: transparent; }
+    .query-results-orders, .query-results-fleets {
+      max-height: none !important; overflow: visible !important;
+      border: none !important; background: transparent !important;
+    }
+    .q-table, .q-table tbody, .q-table tr, .q-table td { display: block; width: 100%; }
+    .q-table thead { display: none; }
+    .q-table tbody tr {
+      border: 1px solid var(--border); border-radius: 10px; background: #0d1117;
+      margin-bottom: 8px; padding: 8px 12px; cursor: pointer;
+    }
+    .q-table td {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      border-top: none; padding: 4px 0; white-space: normal; font-size: 13px;
+    }
+    .q-table td::before {
+      content: attr(data-label);
+      color: var(--muted); font-size: 12px; flex-shrink: 0; text-align: left;
+    }
+    .q-table td[data-label="订单号"] { font-weight: 600; }
+    /* 控制台 / 日志 / 全局按钮 */
+    .console { height: 300px; font-size: 12px; padding: 10px; }
+    .log-header { flex-wrap: wrap; gap: 8px; }
+    .log-header select { flex: 1 1 100%; min-width: 0; }
+    .global-actions .btn { padding: 12px 0; font-size: 15px; }
+    .tips { font-size: 12px; }
+    #authOverlay .card { width: calc(100vw - 32px) !important; max-width: 380px; }
+  }
 </style>
 </head>
 <body>
@@ -515,9 +569,9 @@
         else if (t.status === 'success') rowCls = ' row-success';
         else if (t.status === 'failed') rowCls = ' row-failed';
         h += '<tr class="' + rowCls + '" title="' + escAttr(t.resultSummary || '') + '">';
-        h += '<td>' + escHtml(t.orderCode) + '</td><td>' + escHtml(t.fleetName) + '</td><td>' + escHtml(t.date) + '</td>';
-        h += '<td>' + (t.maxVehicle > 0 ? t.maxVehicle : '不限') + '</td><td>' + escHtml(statusMap[t.status] || t.status) + '</td>';
-        h += '<td><button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
+        h += '<td data-label="订单号">' + escHtml(t.orderCode) + '</td><td data-label="车队">' + escHtml(t.fleetName) + '</td><td data-label="日期">' + escHtml(t.date) + '</td>';
+        h += '<td data-label="车辆">' + (t.maxVehicle > 0 ? t.maxVehicle : '不限') + '</td><td data-label="状态">' + escHtml(statusMap[t.status] || t.status) + '</td>';
+        h += '<td data-label="操作"><button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
         if (t.status === 'running') h += ' <button class="btn-mini" data-action="stop-task" data-tid="' + escAttr(t.id) + '">停止</button>';
         if (t.status !== 'running' && t.status !== 'pending') h += ' <button class="btn-mini" data-action="reset-task" data-tid="' + escAttr(t.id) + '">重跑</button>';
         h += '</td></tr>';
@@ -873,9 +927,9 @@
     var h = '<table class="q-table"><thead><tr><th>订单号</th><th>货主</th><th>货品</th><th>剩余/总(吨)</th><th>今日</th><th>明日</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       h += '<tr data-code="' + escAttr(r.quoteCode) + '">';
-      h += '<td>' + escHtml(r.quoteCode) + '</td><td>' + escHtml(r.customerName) + '</td><td>' + escHtml(r.productName) + '</td>';
-      h += '<td>' + escHtml(r.inCompleteWeight) + ' / ' + escHtml(r.weight) + '</td>';
-      h += '<td>' + escHtml(r.quotaToday || '-') + '</td><td>' + escHtml(r.quotaTomorrow || '-') + '</td>';
+      h += '<td data-label="订单号">' + escHtml(r.quoteCode) + '</td><td data-label="货主">' + escHtml(r.customerName) + '</td><td data-label="货品">' + escHtml(r.productName) + '</td>';
+      h += '<td data-label="剩余/总(吨)">' + escHtml(r.inCompleteWeight) + ' / ' + escHtml(r.weight) + '</td>';
+      h += '<td data-label="今日配额">' + escHtml(r.quotaToday || '-') + '</td><td data-label="明日配额">' + escHtml(r.quotaTomorrow || '-') + '</td>';
       h += '</tr>';
     });
     h += '</tbody></table>';
@@ -887,8 +941,8 @@
     var h = '<table class="q-table"><thead><tr><th>车队ID</th><th>车队名称</th><th>承运商</th><th>操作</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       h += '<tr data-name="' + escAttr(r.name) + '">';
-      h += '<td>' + escHtml(r.id) + '</td><td>' + escHtml(r.name) + '</td><td>' + escHtml(r.carrierName) + '</td>';
-      h += '<td><button class="q-btn-mini" data-fid="' + escAttr(r.id) + '" data-fname="' + escAttr(r.name) + '">车辆统计</button></td>';
+      h += '<td data-label="车队ID">' + escHtml(r.id) + '</td><td data-label="车队名称">' + escHtml(r.name) + '</td><td data-label="承运商">' + escHtml(r.carrierName) + '</td>';
+      h += '<td data-label="操作"><button class="q-btn-mini" data-fid="' + escAttr(r.id) + '" data-fname="' + escAttr(r.name) + '">车辆统计</button></td>';
       h += '</tr>';
     });
     h += '</tbody></table>';
