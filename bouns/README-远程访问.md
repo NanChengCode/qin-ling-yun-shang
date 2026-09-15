@@ -76,7 +76,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now grab-token-notify.timer
 ```
 
-- `notify-token.sh`：仅当令牌在最近 3 分钟内被轮换时才推送（防止服务未运行时误发旧令牌）。双通道：①私聊——经 `runuser` 以飞书登录用户身份调 `notify.sh` 发应用机器人 P2P 消息；②群会话——读 `/opt/grab_tool/lark/group-webhook.url`（600 root）POST 到群自定义机器人 webhook（外部群唯一可用方式，无需应用发布；未配置时静默跳过）。
+- 脚本源文件在 `bouns/lark/`（`notify-token.sh` / `notify.sh`），部署到 `/opt/grab_tool/lark/`。
+- `notify-token.sh`：仅当令牌在最近 3 分钟内被轮换时才推送（防止服务未运行时误发旧令牌）。**每条通道发两条消息**：①仅令牌本身（飞书里长按该消息 → 复制，即得纯令牌，粘贴到登录框即可）；②说明文字（更新时间与使用提示）。双通道：①私聊——经 `runuser` 以飞书登录用户身份调 `notify.sh` 发应用机器人 P2P 消息，收件人 open_id 存 `/opt/grab_tool/lark/p2p-user-id`（root 600，不进 git）；②群会话——读 `/opt/grab_tool/lark/group-webhook.url`（600 root）POST 到群自定义机器人 webhook（外部群唯一可用方式，无需应用发布；未配置时静默跳过）。
 - 收不到消息时的兜底：登录服务器 `cat data/token.txt`。
 
 ## 二、公网访问（frp 内网穿透）
