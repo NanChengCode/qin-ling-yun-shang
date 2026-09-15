@@ -1,0 +1,24 @@
+# 秦岭云商抢单工具 systemd 服务单元 (模板)
+# 部署: sudo cp grab_server.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#       sudo systemctl enable --now grab-server
+# 注意: 按实际路径/用户修改 WorkingDirectory / ExecStart / User
+# 访问令牌查看: sudo journalctl -u grab-server -n 30  或  cat data/token.txt
+
+[Unit]
+Description=Qinling Grab Server (秦岭云商抢单远程服务)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wupengyu
+WorkingDirectory=/home/wupengyu/qinlingyunshang/bouns
+ExecStart=/usr/bin/python3 /home/wupengyu/qinlingyunshang/bouns/grab_server.py --host 0.0.0.0 --port 8787
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

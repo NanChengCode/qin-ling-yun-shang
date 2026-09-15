@@ -1,0 +1,20 @@
+# ============ 大文件 (GitHub 单文件限制 100MB) ============
+bouns.zip
+*.zip
+
+# ============ 构建产物 (PyInstaller) ============
+build/
+dist/
+秦岭云商抢单工具/
+__pycache__/
+*.pyc
+*.exe
+
+# ============ 运行时数据 —— 含密钥，严禁提交 ============
+# token.txt 访问令牌 / secret.key 加密密钥 / server.key TLS 私钥 / state.json 账号数据
+bouns/data/
+logs/
+
+# ============ IDE / 本地工具配置 ============
+.trae/
+.claude/settings.local.json

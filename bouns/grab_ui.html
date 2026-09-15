@@ -1,0 +1,1092 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>秦岭云商 · 多账号自动抢单控制台</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3;
+    --muted: #8b949e; --green: #2ea043; --green-bright: #7ee787;
+    --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --orange: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    min-height: 100vh; padding: 24px;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  header .logo {
+    width: 42px; height: 42px; border-radius: 10px;
+    background: linear-gradient(135deg, #1f6feb, #2ea043);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 20px; color: #fff;
+  }
+  header h1 { font-size: 22px; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .status-pill {
+    margin-left: auto; padding: 6px 14px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted);
+  }
+  .status-pill.running { color: var(--yellow); border-color: var(--yellow); animation: pulse 1.2s infinite; }
+  .status-pill.ok { color: var(--green-bright); border-color: var(--green); }
+  .status-pill.fail { color: var(--red); border-color: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 15px; font-weight: 600; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card h2::before { content: ''; width: 4px; height: 16px; background: var(--blue); border-radius: 2px; }
+
+  .field { margin-bottom: 6px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field label .req { color: var(--red); }
+  .field input[type=text], .field input[type=password], .field input[type=number] {
+    width: 100%; background: #0d1117; border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; color: var(--text);
+    font-size: 13px; outline: none; transition: border-color .15s;
+  }
+  .field input:focus { border-color: var(--blue); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .row4 { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
+
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg label {
+    flex: 1; text-align: center; padding: 7px 0; font-size: 12px;
+    cursor: pointer; color: var(--muted); background: #0d1117; transition: all .15s;
+  }
+  .seg input { display: none; }
+  .seg label:has(input:checked) { background: var(--blue); color: #fff; }
+
+  .checks { display: flex; align-items: center; gap: 6px; }
+  .checks input { width: 14px; height: 14px; accent-color: var(--green); }
+  .checks label { font-size: 12px; color: var(--muted); cursor: pointer; }
+
+  .actions { display: flex; gap: 10px; }
+  .btn {
+    padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 700;
+    cursor: pointer; border: 1px solid transparent; transition: all .15s;
+  }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-run { background: var(--green); color: #fff; }
+  .btn-run:hover:not(:disabled) { background: #2faa4e; }
+  .btn-stop { background: transparent; border-color: var(--red); color: var(--red); }
+  .btn-stop:hover:not(:disabled) { background: rgba(248,81,73,.12); }
+  .btn-ghost {
+    background: transparent; border: 1px solid var(--blue); color: var(--blue);
+    padding: 7px 14px; border-radius: 8px; font-weight: 600; font-size: 12px; cursor: pointer;
+    transition: all .15s;
+  }
+  .btn-ghost:hover:not(:disabled) { background: rgba(88,166,255,.12); }
+  .btn-ghost:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-mini {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; font-size: 11px; padding: 2px 8px; cursor: pointer;
+  }
+  .btn-mini:hover { border-color: var(--red); color: var(--red); }
+  .btn-mini.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .account-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
+  }
+  .account-header h3 { font-size: 14px; font-weight: 600; }
+  .account-header .acct-badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
+    color: var(--muted); margin-left: 8px;
+  }
+  .acct-badge.logged { color: var(--green-bright); border-color: var(--green); }
+
+  .q-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .q-status { color: var(--muted); font-size: 12px; }
+  .q-check { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+
+  .table-wrap { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: #0d1117; }
+  table.q-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .q-table th {
+    position: sticky; top: 0; background: #1a2028; text-align: left;
+    padding: 6px 8px; color: var(--muted); font-weight: 600; white-space: nowrap; z-index: 1;
+  }
+  .q-table td { padding: 5px 8px; border-top: 1px solid var(--border); white-space: nowrap; }
+  .q-table tbody tr { cursor: pointer; }
+  .q-table tbody tr:hover { background: #1c2530; }
+  .q-table tbody tr.row-running { background: #1a2a1a; }
+  .q-table tbody tr.row-success { background: #0d1f0d; }
+  .q-table tbody tr.row-failed { background: #2a1a1a; }
+  .q-empty { color: var(--muted); padding: 16px; text-align: center; font-size: 12px; }
+  .q-flash { background: #1f3d2b !important; }
+  .q-btn-mini {
+    background: transparent; border: 1px solid var(--green); color: var(--green-bright);
+    border-radius: 6px; font-size: 11px; padding: 2px 8px; cursor: pointer;
+  }
+  .q-btn-mini:hover { background: rgba(46,160,67,.15); }
+  .q-btn-mini:disabled { opacity: .45; cursor: not-allowed; }
+  .stat-line {
+    margin-top: 6px; padding: 7px 10px; border: 1px dashed var(--border);
+    border-radius: 8px; font-size: 12px; color: var(--text); background: #0d1117;
+  }
+  .query-results { margin-bottom: 10px; }
+
+  .task-summary { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+
+  .console {
+    background: #000; border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; height: 400px; overflow-y: auto;
+    font-family: Consolas, "Courier New", monospace; font-size: 13px;
+    line-height: 1.55; white-space: pre-wrap; word-break: break-all; color: #8c9aab;
+  }
+  .console .ln-err { color: var(--red); }
+  .console .ln-ok { color: var(--green-bright); }
+  .console .ln-info { color: #9db8d9; }
+
+  .log-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .log-header select {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; color: var(--text); font-size: 14px; outline: none; min-width: 200px;
+  }
+  .log-header .log-badge {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 600;
+    border: 1px solid var(--border);
+  }
+  .log-badge.running { color: var(--yellow); border-color: var(--yellow); }
+  .log-badge.success { color: var(--green-bright); border-color: var(--green); }
+  .log-badge.failed { color: var(--red); border-color: var(--red); }
+  .log-badge.stopped { color: var(--orange); border-color: var(--orange); }
+
+  .global-actions { display: flex; gap: 12px; align-items: center; }
+  .global-actions .btn { flex: 1; padding: 12px 0; font-size: 16px; }
+
+  .tips { margin-top: 20px; color: var(--muted); font-size: 13px; line-height: 1.8; }
+  .tips h2 { font-size: 14px; color: var(--text); margin-bottom: 6px; }
+  .tips li { margin-left: 18px; }
+  .tips code { background: var(--card); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div id="authOverlay" style="position:fixed;inset:0;background:var(--bg);z-index:99;display:none;align-items:center;justify-content:center">
+    <div class="card" style="width:380px;text-align:center">
+      <h2 style="justify-content:center">访问验证</h2>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:12px">请输入服务器启动时打印的访问令牌</p>
+      <input type="password" id="authTokenInput" style="width:100%;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;outline:none;margin-bottom:12px;text-align:center" placeholder="访问令牌">
+      <p id="authError" style="color:var(--red);font-size:12px;margin-bottom:10px;display:none">令牌无效, 请重试</p>
+      <button class="btn btn-run" id="btnAuthLogin" style="width:100%">进入控制台</button>
+      <p style="color:#484f58;font-size:12px;margin-top:12px">令牌保存在本机浏览器中, 下次自动登录</p>
+    </div>
+  </div>
+<div class="wrap">
+  <header>
+    <div class="logo">秦</div>
+    <div>
+      <h1>秦岭云商 · 多账号自动抢单控制台</h1>
+      <div class="sub">多账号并行抢单 · 直接调用网页接口 · 远程服务 · Python 版</div>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+      <div class="status-pill" id="statusPill">空闲</div>
+      <button class="btn-mini" id="btnLogout" title="断开连接, 重新输入令牌">断开</button>
+    </div>
+  </header>
+
+  <div class="actions" style="margin-bottom:16px">
+    <button class="btn btn-ghost" id="btnAddAccount">+ 添加账号</button>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;margin-left:auto;cursor:pointer">
+      <input type="checkbox" id="globalDryRun" checked style="width:16px;height:16px;accent-color:var(--green)">
+      <b style="color:var(--green-bright)">演练模式</b> (全局开关)
+    </label>
+  </div>
+
+  <div id="accountsContainer"></div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>全局控制</h2>
+    <div class="global-actions">
+      <button class="btn btn-run" id="btnStartAll">开始全部</button>
+      <button class="btn btn-stop" id="btnStopAll">停止全部</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>运行日志</h2>
+    <div class="log-header">
+      <select id="logDateSelector">
+        <option value="live">今天 (实时)</option>
+      </select>
+      <span class="log-badge" id="logBadge" style="display:none"></span>
+    </div>
+    <div class="console" id="console">等待任务启动, 日志将实时显示在这里...
+提示: 请先添加账号, 填写订单和车队后点击"开始全部"。</div>
+  </div>
+
+  <div class="card tips">
+    <h2>使用说明</h2>
+    <ul>
+      <li>点击 <b>+ 添加账号</b> 创建账号模块, 填写账号密码后可查询订单和车队。</li>
+      <li>每个账号可添加多个订单任务, 点击 <b>开始全部</b> 所有账号并行抢单。</li>
+      <li>添加任务时选「并行拆分」份数, 服务端自动创建多个子任务并把车队车辆均分, 各子任务互不重叠并行抢单; 登录仅消耗一次 (含验证码)。</li>
+      <li>每个账号模块有独立的 <b>启动本账号</b>/<b>停止本账号</b> 按钮。</li>
+      <li>演练模式默认开启, 确认无误后取消勾选真实抢单。</li>
+      <li>账号与任务状态保存在服务器, 多设备实时共享; 访问令牌保存在本机浏览器。</li>
+    </ul>
+    <div style="margin-top:10px;color:#484f58;font-size:12px;">UI v7 (Python) · 多账号并发 · 测试模式默认开启</div>
+  </div>
+</div><script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var consoleEl = $('console');
+  var pillEl = $('statusPill');
+  var logBadge = $('logBadge');
+  var btnStartAll = $('btnStartAll');
+  var btnStopAll = $('btnStopAll');
+  var accounts = [];
+  var logOffset = 0;
+  var pollTimer = null;
+  var logPollTimer = null;
+  var lastDryRunSentAt = 0;   // 最近推送演练开关的时间戳 (防轮询回弹)
+  var lastStructSig = '';     // 账号/任务结构签名 (结构变化才整卡重渲染)
+
+  // ========== 访问令牌 ==========
+  function getToken() { try { return localStorage.getItem('grab_token') || ''; } catch (e) { return ''; } }
+  function setToken(t) { try { localStorage.setItem('grab_token', t); } catch (e) {} }
+  function authFetch(url, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    opts.headers['X-Auth-Token'] = getToken();
+    return fetch(url, opts).then(function (r) {
+      if (r.status === 401) { setToken(''); showAuth(); stopPolling(); throw new Error('未授权'); }
+      return r;
+    });
+  }
+  function showAuth() {
+    $('authOverlay').style.display = 'flex';
+    $('authTokenInput').value = '';
+    $('authError').style.display = 'none';
+    setTimeout(function () { $('authTokenInput').focus(); }, 50);
+  }
+  function hideAuth() { $('authOverlay').style.display = 'none'; }
+  function tryLogin() {
+    var t = $('authTokenInput').value.trim();
+    if (!t) { return; }
+    setToken(t);   // 暂存, 供 authFetch 携带
+    authFetch('/api/auth', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) { hideAuth(); initApp(); }
+        else { setToken(''); $('authError').style.display = 'block'; }
+      })
+      .catch(function () { setToken(''); $('authError').style.display = 'block'; });
+  }
+  $('btnAuthLogin').addEventListener('click', tryLogin);
+  $('authTokenInput').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { tryLogin(); } });
+  $('btnLogout').addEventListener('click', function () { setToken(''); showAuth(); stopPolling(); });
+
+  // ========== 本地存储 ==========
+  function loadAccounts() {
+    try { var raw = localStorage.getItem('grab_accounts'); if (raw) { accounts = JSON.parse(raw); } }
+    catch (e) { accounts = []; }
+    if (!Array.isArray(accounts)) { accounts = []; }
+  }
+  function saveAccounts() { localStorage.setItem('grab_accounts', JSON.stringify(accounts)); }
+  loadAccounts();
+  var dryRunEl = globalDryRun;
+  var dryRunDebounce = null;
+  if (dryRunEl) {
+    var savedDry = localStorage.getItem('grab_globalDryRun');
+    if (savedDry !== null) { dryRunEl.checked = savedDry === '1'; }
+    dryRunEl.addEventListener('change', function () {
+      localStorage.setItem('grab_globalDryRun', this.checked ? '1' : '0');
+      if (!this.checked && !confirm('确定关闭演练模式, 进行真实抢单?')) {
+        this.checked = true;
+        localStorage.setItem('grab_globalDryRun', '1');
+        return;
+      }
+      if (dryRunDebounce) { clearTimeout(dryRunDebounce); }
+      dryRunDebounce = setTimeout(function () {
+        authFetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({ globalDryRun: dryRunEl.checked })
+        }).then(function () {
+          lastDryRunSentAt = Date.now();
+        }).catch(function () {});
+      }, 500);
+    });
+  }
+
+  function escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = (s === null || s === undefined) ? '' : String(s);
+    return d.innerHTML;
+  }
+  function escAttr(s) { return escHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+  // ========== 状态显示 ==========
+  function setStatus(text, cls) {
+    pillEl.textContent = text;
+    pillEl.className = 'status-pill' + (cls ? ' ' + cls : '');
+  }
+
+  // ========== 日志 ==========
+  function appendLog(text, isError) {
+    if (!text) { return; }
+    var lines = text.split(/\r?\n/);
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < lines.length; i++) {
+      if (!lines[i]) { continue; }
+      var div = document.createElement('div');
+      var cls = 'ln-info';
+      if (isError || /失败[:：]|失败$|错误[:：]|异常[:：]|不支持|未成功|error\b/i.test(lines[i])) { cls = 'ln-err'; }
+      else if (/\[RESULT\].*成功/i.test(lines[i])) { cls = 'ln-ok'; }
+      else if (/\[RESULT\].*失败/i.test(lines[i])) { cls = 'ln-err'; }
+      else if (/成功[:：]|成功$|通过[:：]|ok\b|==========.*成功/i.test(lines[i])) { cls = 'ln-ok'; }
+      div.className = cls;
+      div.textContent = lines[i];
+      frag.appendChild(div);
+    }
+    consoleEl.appendChild(frag);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  }
+
+  function selectLogDate(dateStr) {
+    stopPolling();
+    consoleEl.innerHTML = '';
+    logOffset = 0;
+    if (dateStr === 'live') {
+      logBadge.style.display = 'none';
+      startPolling();
+    } else {
+      logBadge.style.display = 'inline-block';
+      logBadge.textContent = dateStr;
+      logBadge.className = 'log-badge';
+      authFetch('/api/logs?date=' + encodeURIComponent(dateStr))
+        .then(function (r) { return r.json(); })
+        .then(function (res) { if (res.ok) { appendLog(res.text || '(无日志)', false); } })
+        .catch(function (e) { appendLog('加载失败: ' + e.message, true); });
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    var failCount = 0;
+    pollTimer = setInterval(function () {
+      authFetch('/api/status')
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          failCount = 0;
+          if (res.accounts) {
+            var sig = JSON.stringify(res.accounts.map(function (a) {
+              return a.id + ':' + (a.tasks || []).map(function (t) { return t.id; }).join(',');
+            }));
+            if (sig !== lastStructSig) {
+              // 账号/任务结构变化 (增删): 以服务端为准整卡重渲染
+              mergeServerAccounts(res.accounts);
+              renderAllAccounts();
+              lastStructSig = sig;
+            } else {
+              // 仅状态变化: 增量更新, 不打断用户输入
+              var allDone = true;
+              res.accounts.forEach(function (acc) {
+                var a = accounts.find(function (x) { return x.id === acc.id; });
+                if (a) {
+                  a.hasCookie = acc.hasCookie;
+                  if (acc.tasks) {
+                    acc.tasks.forEach(function (st) {
+                      var existing = (a.tasks || []).find(function (x) { return x.id === st.id; });
+                      if (existing) {
+                        existing.status = st.status;
+                        existing.exitCode = st.exitCode;
+                        existing.resultSummary = st.resultSummary || '';
+                      }
+                    });
+                  }
+                }
+                if (a && a.tasks && a.tasks.some(function (t) { return t.status === 'running'; })) { allDone = false; }
+              });
+              saveAccounts();
+              accounts.forEach(function (acc) { updateTaskListInCard(acc.id); });
+              if (allDone && accounts.length > 0 && accounts.some(function (a) { return (a.tasks || []).length > 0; })) {
+                // 只要还有待执行(pending)或运行中(running)的任务, 停止全部就保持可点击
+                var hasActive = accounts.some(function (a) { return (a.tasks || []).some(function (t) { return t.status === 'running' || t.status === 'pending'; }); });
+                if (!hasActive) { setStatus('空闲', ''); btnStartAll.disabled = false; btnStopAll.disabled = true; }
+              }
+            }
+            applyServerDryRun(res.settings);
+          }
+        })
+        .catch(function () { failCount++; if (failCount >= 3) { stopPolling(); setStatus('服务未运行', 'fail'); } });
+    }, 400);
+
+    logPollTimer = setInterval(function () {
+      if ($('logDateSelector').value !== 'live') { return; }
+      authFetch('/api/log?since=' + logOffset)
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res.offset < logOffset) { logOffset = res.offset; }  // 服务重启后偏移自愈
+          appendLog(res.text, false);
+          logOffset = res.offset;
+        })
+        .catch(function () {});
+    }, 400);
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
+  }
+
+  // ========== 账号渲染 ==========
+  function renderAllAccounts() {
+    var container = $('accountsContainer');
+    if (accounts.length === 0) {
+      container.innerHTML = '<div class="card" style="text-align:center;color:var(--muted);padding:40px">还没有添加账号, 点击上方 <b>+ 添加账号</b> 开始</div>';
+      return;
+    }
+    var h = '';
+    accounts.forEach(function (acc) {
+      h += renderAccountCard(acc);
+    });
+    container.innerHTML = h;
+  }
+
+  function renderAccountCard(acc) {
+    var tasks = acc.tasks || [];
+    var statusMap = { pending: '待执行', running: '运行中', success: '成功', failed: '失败', stopped: '已停止' };
+    var summary = { pending: 0, running: 0, success: 0, failed: 0, stopped: 0 };
+    tasks.forEach(function (t) { summary[t.status] = (summary[t.status] || 0) + 1; });
+
+    var h = '<div class="card account-card" data-account-id="' + escAttr(acc.id) + '">';
+    h += '<div class="account-header">';
+    h += '<h3>账号: ' + escHtml(acc.username || '(未填写)') + '<span class="acct-badge' + (acc.hasCookie ? ' logged' : '') + '">' + (acc.hasCookie ? '已登录' : '未登录') + '</span></h3>';
+    h += '<button class="btn-mini danger" data-action="delete-account">删除账号</button>';
+    h += '</div>';
+
+    // Credentials
+    h += '<div class="row3">';
+    h += '<div class="field"><label>账号 <span class="req">*</span></label><input type="text" class="acct-username" value="' + escAttr(acc.username || '') + '" placeholder="登录账号"></div>';
+    var pwdPh = (acc.passwordSet === false && !acc.password) ? '密码未在本机保存' : '登录密码';
+    h += '<div class="field"><label>密码 <span class="req">*</span></label><div style="display:flex;gap:4px"><input type="password" class="acct-password" style="flex:1" value="' + escAttr(acc.password || '') + '" placeholder="' + pwdPh + '"><button type="button" class="btn-mini toggle-pwd" style="flex-shrink:0;white-space:nowrap" data-action="toggle-password">显示</button></div></div>';
+    h += '<div class="field"><label>验证码(可选)</label><input type="text" class="acct-smscode" value="' + escAttr(acc.smsCode || '') + '" placeholder="短信验证码"></div>';
+    h += '</div>';
+
+    // Query buttons
+    h += '<div class="q-actions" style="margin-top:10px">';
+    h += '<button class="btn-ghost" data-action="query-orders">查询订单</button>';
+    h += '<button class="btn-ghost" data-action="query-fleets">查询车队</button>';
+    h += '<span class="q-check"><input type="checkbox" class="with-quota" checked><label>附带配额</label></span>';
+    h += '<span class="q-status"></span>';
+    h += '<button class="btn-mini toggle-results" data-action="toggle-results" style="display:none;margin-left:auto">收起结果</button>';
+    h += '</div>';
+    h += '<div class="query-results-wrap" style="display:none"><div class="query-results-orders" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:#0d1117"></div><div class="query-results-fleets" style="display:none;max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:#0d1117"></div></div>';
+
+    // Task form
+    h += '<div class="row2" style="margin-top:8px">';
+    h += '<div class="field"><label>订单号 <span class="req">*</span></label><input type="text" class="task-ordercode" placeholder="或点击查询结果填入"></div>';
+    h += '<div class="field"><label>车队名称 <span class="req">*</span></label><input type="text" class="task-fleetname" placeholder="或点击查询结果填入"></div>';
+    h += '</div>';
+    h += '<div class="row4">';
+    h += '<div class="field"><label>预约日期</label><div class="seg"><label><input type="radio" name="date-' + acc.id + '" value="今日" checked><span>今日</span></label><label><input type="radio" name="date-' + acc.id + '" value="明日"><span>明日</span></label><label><input type="radio" name="date-' + acc.id + '" value="后日"><span>后日</span></label></div></div>';
+    h += '<div class="field"><label>最多车辆</label><input type="number" class="task-maxvehicle" value="0" min="0"></div>';
+    h += '<div class="field"><label>并行拆分</label><select class="task-splitcount"><option value="1">1 份 (不拆)</option><option value="2">2 份</option><option value="3">3 份</option><option value="4">4 份</option><option value="5">5 份</option><option value="6">6 份</option></select></div>';
+    h += '<button class="btn btn-ghost" data-action="add-task" style="padding:8px 16px">添加任务</button>';
+    h += '</div>';
+
+    // Task list
+    h += '<div class="task-summary" style="margin-top:10px">';
+    var parts = [];
+    if (summary.pending > 0) parts.push('待执行 ' + summary.pending);
+    if (summary.running > 0) parts.push('运行中 ' + summary.running);
+    if (summary.success > 0) parts.push('成功 ' + summary.success);
+    if (summary.failed > 0) parts.push('失败 ' + summary.failed);
+    h += '任务: ' + tasks.length + ' 个' + (parts.length > 0 ? ' | ' + parts.join(' | ') : '');
+    h += '</div>';
+
+    if (tasks.length > 0) {
+      h += '<div class="task-table-wrap table-wrap"><table class="q-table"><thead><tr><th>订单号</th><th>车队</th><th>日期</th><th>车辆</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+      tasks.forEach(function (t) {
+        var rowCls = '';
+        if (t.status === 'running') rowCls = ' row-running';
+        else if (t.status === 'success') rowCls = ' row-success';
+        else if (t.status === 'failed') rowCls = ' row-failed';
+        h += '<tr class="' + rowCls + '" title="' + escAttr(t.resultSummary || '') + '">';
+        h += '<td>' + escHtml(t.orderCode) + '</td><td>' + escHtml(t.fleetName) + '</td><td>' + escHtml(t.date) + '</td>';
+        h += '<td>' + (t.maxVehicle > 0 ? t.maxVehicle : '不限') + '</td><td>' + escHtml(statusMap[t.status] || t.status) + '</td>';
+        h += '<td><button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
+        if (t.status === 'running') h += ' <button class="btn-mini" data-action="stop-task" data-tid="' + escAttr(t.id) + '">停止</button>';
+        if (t.status !== 'running' && t.status !== 'pending') h += ' <button class="btn-mini" data-action="reset-task" data-tid="' + escAttr(t.id) + '">重跑</button>';
+        h += '</td></tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+
+    // Per-account controls
+    h += '<div class="actions" style="margin-top:10px">';
+    h += '<button class="btn btn-run" data-action="start-account">启动本账号</button>';
+    h += '<button class="btn btn-stop" data-action="stop-account">停止本账号</button>';
+    h += '<button class="btn btn-ghost" data-action="reset-account-tasks">重置任务</button>';
+    h += '</div>';
+    h += '</div>';
+    return h;
+  }
+
+  // ========== 事件委托 ==========
+  $('accountsContainer').addEventListener('click', function (ev) {
+    var card = ev.target.closest('.account-card');
+    if (!card) { return; }
+    var accountId = card.getAttribute('data-account-id');
+    var btn = ev.target.closest('button');
+    if (!btn) {
+      // 查询结果行点击: 填入任务表单
+      var tr = ev.target.closest('tr');
+      if (tr && (card.querySelector('.query-results-orders').style.display !== 'none' || card.querySelector('.query-results-fleets').style.display !== 'none')) {
+        var code = tr.getAttribute('data-code');
+        var name = tr.getAttribute('data-name');
+        if (code) { card.querySelector('.task-ordercode').value = code; }
+        if (name) { card.querySelector('.task-fleetname').value = name; }
+        if (code || name) { tr.classList.add('q-flash'); setTimeout(function () { tr.classList.remove('q-flash'); }, 800); }
+      }
+      return;
+    }
+    if (ev.target.closest('.query-results') && btn.classList.contains('q-btn-mini')) {
+      // 车辆统计按钮
+      fleetStats(accountId, btn.getAttribute('data-fid'), btn.getAttribute('data-fname'), btn);
+      return;
+    }
+    var action = btn.getAttribute('data-action');
+    if (!action) { return; }
+    ev.stopPropagation();
+
+    switch (action) {
+      case 'delete-account':
+        if (confirm('确定删除该账号及其所有任务?')) { deleteAccount(accountId); }
+        break;
+      case 'add-task':
+        addTask(accountId, card);
+        break;
+      case 'remove-task':
+        removeTask(accountId, btn.getAttribute('data-tid'));
+        break;
+      case 'stop-task':
+        stopTask(accountId, btn.getAttribute('data-tid'));
+        break;
+      case 'reset-task':
+        resetTask(accountId, btn.getAttribute('data-tid'));
+        break;
+      case 'start-account':
+        startAccount(accountId);
+        break;
+      case 'stop-account':
+        stopAccount(accountId);
+        break;
+      case 'reset-account-tasks':
+        resetAccountTasks(accountId);
+        break;
+      case 'query-orders':
+        queryForAccount(accountId, card, 'Orders');
+        break;
+      case 'query-fleets':
+        queryForAccount(accountId, card, 'Fleets');
+        break;
+      case 'toggle-results':
+        var wrap = card.querySelector('.query-results-wrap');
+        if (wrap) {
+          if (wrap.style.display === 'none') { wrap.style.display = 'block'; btn.textContent = '收起结果'; }
+          else { wrap.style.display = 'none'; btn.textContent = '展开结果'; }
+        }
+        break;
+      case 'toggle-password':
+        var pwdInput = btn.parentElement.querySelector('.acct-password');
+        if (pwdInput) {
+          if (pwdInput.type === 'password') { pwdInput.type = 'text'; btn.textContent = '隐藏'; }
+          else { pwdInput.type = 'password'; btn.textContent = '显示'; }
+        }
+        break;
+    }
+  });
+
+  // 账号凭据输入框失焦时保存 + 即时推送到服务端
+  $('accountsContainer').addEventListener('change', function (ev) {
+    var card = ev.target.closest('.account-card');
+    if (!card) { return; }
+    var accountId = card.getAttribute('data-account-id');
+    var acc = accounts.find(function (a) { return a.id === accountId; });
+    if (!acc) { return; }
+    var u = card.querySelector('.acct-username');
+    var p = card.querySelector('.acct-password');
+    var s = card.querySelector('.acct-smscode');
+    if (u) acc.username = u.value.trim();
+    if (p) acc.password = p.value;
+    if (s) acc.smsCode = s.value.trim();
+    saveAccounts();
+    // 凭据变更即时推送到服务端 (只推非空字段, 防止空值覆盖服务端凭据)
+    var body = {};
+    var cls = ev.target.className || '';
+    if (cls.indexOf('acct-username') >= 0 && acc.username) { body.username = acc.username; }
+    else if (cls.indexOf('acct-password') >= 0 && acc.password) { body.password = acc.password; }
+    else if (cls.indexOf('acct-smscode') >= 0) { body.smsCode = acc.smsCode || ''; }
+    if (Object.keys(body).length > 0) {
+      authFetch('/api/accounts/' + accountId + '/creds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(body)
+      }).catch(function () {});
+    }
+  });
+
+  function getAccountCreds(accountId, card) {
+    var acc = accounts.find(function (a) { return a.id === accountId; });
+    if (!acc) { return null; }
+    var u = card.querySelector('.acct-username');
+    var p = card.querySelector('.acct-password');
+    var s = card.querySelector('.acct-smscode');
+    if (u) acc.username = u.value.trim();
+    if (p) acc.password = p.value;
+    if (s) acc.smsCode = s.value.trim();
+    saveAccounts();
+    return { username: acc.username, password: acc.password, smsCode: acc.smsCode || '' };
+  }
+
+  // ========== 账号操作 ==========
+  $('btnAddAccount').addEventListener('click', function () {
+    var acc = { id: 'local_' + Date.now().toString(36), username: '', password: '', smsCode: '', tasks: [], hasCookie: false };
+    authFetch('/api/accounts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ username: '', password: '' })
+    }).then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          acc.id = res.accountId;
+          accounts.push(acc);
+          saveAccounts();
+          renderAllAccounts();
+        }
+      }).catch(function () {});
+  });
+
+  function deleteAccount(accountId) {
+    authFetch('/api/accounts/' + accountId, { method: 'DELETE' })
+      .then(function () {
+        accounts = accounts.filter(function (a) { return a.id !== accountId; });
+        saveAccounts(); renderAllAccounts();
+      }).catch(function () {});
+  }
+
+  function startAccount(accountId) {
+    authFetch('/api/accounts/' + accountId + '/start', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          setStatus('运行中', 'running');
+          btnStartAll.disabled = true; btnStopAll.disabled = false;
+          startPolling();
+        } else { appendLog('[ERROR] ' + res.msg + '\n', true); }
+      }).catch(function (e) { appendLog('[ERROR] ' + e.message + '\n', true); });
+  }
+
+  function stopAccount(accountId) {
+    authFetch('/api/accounts/' + accountId + '/stop', { method: 'POST' })
+      .then(function () { }).catch(function () {});
+  }
+
+  function resetAccountTasks(accountId) {
+    var acc = accounts.find(function (a) { return a.id === accountId; });
+    var cnt = acc && acc.tasks ? acc.tasks.length : 0;
+    if (!confirm('确定重置该账号的 ' + cnt + ' 个任务状态为待执行吗?\n(运行中的任务需先停止)')) { return; }
+    authFetch('/api/accounts/' + accountId + '/reset-tasks', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          appendLog('[SERVER] ' + res.msg + '\n');
+        } else {
+          appendLog('[ERROR] ' + (res.msg || '重置失败') + '\n', true);
+        }
+      }).catch(function (e) { appendLog('[ERROR] 重置失败: ' + e.message + '\n', true); });
+  }
+
+  // ========== 局部更新辅助 ==========
+  function updateTaskListInCard(accountId) {
+    var acc = accounts.find(function(a) { return a.id === accountId; });
+    if (!acc) return;
+    var card = document.querySelector('.account-card[data-account-id="' + accountId + '"]');
+    if (!card) return;
+    var tasks = acc.tasks || [];
+    var statusMap = { pending: '待执行', running: '运行中', success: '成功', failed: '失败', stopped: '已停止' };
+
+    // 渲染任务表格行
+    var h = '';
+    tasks.forEach(function(t) {
+      var rowCls = '';
+      if (t.status === 'running') rowCls = ' row-running';
+      else if (t.status === 'success') rowCls = ' row-success';
+      else if (t.status === 'failed') rowCls = ' row-failed';
+      h += '<tr class="' + rowCls + '" title="' + escAttr(t.resultSummary || '') + '">';
+      h += '<td>' + escHtml(t.orderCode) + '</td><td>' + escHtml(t.fleetName) + '</td><td>' + escHtml(t.date) + '</td>';
+      h += '<td>' + (t.maxVehicle > 0 ? t.maxVehicle : '不限') + '</td><td>' + escHtml(statusMap[t.status] || t.status) + '</td>';
+      h += '<td><button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
+      if (t.status === 'running') h += ' <button class="btn-mini" data-action="stop-task" data-tid="' + escAttr(t.id) + '">停止</button>';
+      if (t.status !== 'running' && t.status !== 'pending') h += ' <button class="btn-mini" data-action="reset-task" data-tid="' + escAttr(t.id) + '">重跑</button>';
+      h += '</td></tr>';
+    });
+
+    // 查找或创建表格容器
+    var wrap = card.querySelector('.task-table-wrap');
+    if (tasks.length > 0) {
+      if (!wrap) {
+        // 首次有任务: 创建完整表格结构
+        var hh = '160px'; var tableHtml = '<div class="task-table-wrap table-wrap" style="max-height:' + hh + '"><table class="q-table"><thead><tr><th>订单号</th><th>车队</th><th>日期</th><th>车辆</th><th>状态</th><th>操作</th></tr></thead><tbody>' + h + '</tbody></table></div>';
+        var summaryEl = card.querySelector('.task-summary');
+        if (summaryEl) {
+          summaryEl.insertAdjacentHTML('afterend', tableHtml);
+        }
+      } else {
+        // 更新已有表格
+        var body = wrap.querySelector('tbody');
+        if (body) body.innerHTML = h;
+        // 动态调整高度
+        wrap.style.maxHeight = '160px';
+      }
+    } else {
+      // 无任务: 移除表格
+      if (wrap) { wrap.remove(); }
+    }
+
+    // 更新摘要
+    var summary = { pending: 0, running: 0, success: 0, failed: 0, stopped: 0 };
+    tasks.forEach(function(t) { summary[t.status] = (summary[t.status] || 0) + 1; });
+    var summaryEl = card.querySelector('.task-summary');
+    if (summaryEl) {
+      var parts = [];
+      if (summary.pending > 0) parts.push('待执行 ' + summary.pending);
+      if (summary.running > 0) parts.push('运行中 ' + summary.running);
+      if (summary.success > 0) parts.push('成功 ' + summary.success);
+      if (summary.failed > 0) parts.push('失败 ' + summary.failed);
+      summaryEl.textContent = '任务: ' + tasks.length + ' 个' + (parts.length > 0 ? ' | ' + parts.join(' | ') : '');
+    }
+  }
+
+  // ========== 任务操作 ==========
+  function addTask(accountId, card) {
+    var creds = getAccountCreds(accountId, card);
+    if (!creds || !creds.username || !creds.password) { appendLog('请先填写账号和密码\n', true); return; }
+    var orderCode = card.querySelector('.task-ordercode').value.trim();
+    var fleetName = card.querySelector('.task-fleetname').value.trim();
+    if (!orderCode || !fleetName) { appendLog('请填写订单号和车队名称\n', true); return; }
+    var dateEl = card.querySelector('input[name="date-' + accountId + '"]:checked');
+    var payload = {
+      accountId: accountId,
+      orderCode: orderCode, fleetName: fleetName,
+      date: dateEl ? dateEl.value : '今日',
+      maxVehicle: parseInt(card.querySelector('.task-maxvehicle').value || '0', 10) || 0,
+      splitCount: parseInt(card.querySelector('.task-splitcount').value || '1', 10) || 1,
+      dryRun: globalDryRun.checked
+    };
+    authFetch('/api/tasks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          var acc = accounts.find(function (a) { return a.id === accountId; });
+          if (acc) {
+            if (!acc.tasks) acc.tasks = [];
+            // 服务端按拆分份数返回多个子任务, 全部加入本地列表
+            (res.taskIds || [res.taskId]).forEach(function (tid) {
+              acc.tasks.push(Object.assign({}, payload, { id: tid, status: 'pending', exitCode: null }));
+            });
+          }
+          saveAccounts();
+          updateTaskListInCard(accountId);
+          card.querySelector('.task-ordercode').value = '';
+          card.querySelector('.task-fleetname').value = '';
+        } else { appendLog('添加失败: ' + res.msg + '\n', true); }
+      }).catch(function (e) { appendLog('添加失败: ' + e.message + '\n', true); });
+  }
+
+  function removeTask(accountId, taskId) {
+    authFetch('/api/tasks/' + taskId, { method: 'DELETE' })
+      .then(function () {
+        var acc = accounts.find(function (a) { return a.id === accountId; });
+        if (acc) { acc.tasks = (acc.tasks || []).filter(function (t) { return t.id !== taskId; }); }
+        saveAccounts();
+        updateTaskListInCard(accountId);
+      }).catch(function () {});
+  }
+
+  function stopTask(accountId, taskId) {
+    authFetch('/api/tasks/' + taskId + '/stop', { method: 'POST' }).catch(function () {});
+  }
+
+  function resetTask(accountId, taskId) {
+    authFetch('/api/tasks/' + taskId + '/reset', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          var acc = accounts.find(function (a) { return a.id === accountId; });
+          if (acc) {
+            var t = (acc.tasks || []).find(function (x) { return x.id === taskId; });
+            if (t) { t.status = 'pending'; t.exitCode = null; t.resultSummary = ''; }
+          }
+          saveAccounts();
+          updateTaskListInCard(accountId);
+        } else { appendLog('[ERROR] 重置失败: ' + res.msg + '\n', true); }
+      }).catch(function () {});
+  }
+
+  // ========== 查询 ==========
+  function queryForAccount(accountId, card, action) {
+    var creds = getAccountCreds(accountId, card);
+    if (!creds || !creds.username || !creds.password) { card.querySelector('.q-status').textContent = '请先填写账号密码'; return; }
+    var statusEl = card.querySelector('.q-status');
+    statusEl.textContent = '查询中...';
+    var withQuota = card.querySelector('.with-quota');
+    var body = { withQuota: withQuota ? withQuota.checked : false, username: creds.username, password: creds.password, smsCode: creds.smsCode };
+    authFetch('/api/accounts/' + accountId + '/query/' + (action === 'Orders' ? 'orders' : 'fleets'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) { statusEl.textContent = '查询失败: ' + (res.msg || '未知'); return; }
+        statusEl.textContent = '查询完成';
+        var toggleBtn = card.querySelector('.toggle-results');
+        if (toggleBtn) { toggleBtn.style.display = 'inline-block'; toggleBtn.textContent = '收起结果'; }
+        card.querySelector('.query-results-wrap').style.display = 'block';
+        if (action === 'Orders') {
+          var div = card.querySelector('.query-results-orders');
+          div.style.display = 'block';
+          div.innerHTML = renderOrdersHtml(res.rows);
+        } else {
+          var div = card.querySelector('.query-results-fleets');
+          div.style.display = 'block';
+          div.innerHTML = renderFleetsHtml(res.rows);
+        }
+      }).catch(function (e) { statusEl.textContent = '请求失败: ' + e.message; });
+  }
+
+  function renderOrdersHtml(rows) {
+    if (!rows || rows.length === 0) return '<div class="q-empty">没有查询到候选订单</div>';
+    var h = '<table class="q-table"><thead><tr><th>订单号</th><th>货主</th><th>货品</th><th>剩余/总(吨)</th><th>今日</th><th>明日</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr data-code="' + escAttr(r.quoteCode) + '">';
+      h += '<td>' + escHtml(r.quoteCode) + '</td><td>' + escHtml(r.customerName) + '</td><td>' + escHtml(r.productName) + '</td>';
+      h += '<td>' + escHtml(r.inCompleteWeight) + ' / ' + escHtml(r.weight) + '</td>';
+      h += '<td>' + escHtml(r.quotaToday || '-') + '</td><td>' + escHtml(r.quotaTomorrow || '-') + '</td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    return h;
+  }
+
+  function renderFleetsHtml(rows) {
+    if (!rows || rows.length === 0) return '<div class="q-empty">没有查询到车队</div>';
+    var h = '<table class="q-table"><thead><tr><th>车队ID</th><th>车队名称</th><th>承运商</th><th>操作</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr data-name="' + escAttr(r.name) + '">';
+      h += '<td>' + escHtml(r.id) + '</td><td>' + escHtml(r.name) + '</td><td>' + escHtml(r.carrierName) + '</td>';
+      h += '<td><button class="q-btn-mini" data-fid="' + escAttr(r.id) + '" data-fname="' + escAttr(r.name) + '">车辆统计</button></td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    return h;
+  }
+
+  function fleetStats(accountId, fid, fname, btn) {
+    var oldText = btn.textContent;
+    var creds = getAccountCreds(accountId, btn.closest('.account-card'));
+    if (!creds || !creds.username || !creds.password) { appendLog('请先填写账号和密码\n', true); return; }
+    btn.disabled = true; btn.textContent = '统计中...';
+    authFetch('/api/accounts/' + accountId + '/query/fleetVehicles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ fleetId: fid, username: creds.username, password: creds.password, smsCode: creds.smsCode })
+    }).then(function (r) { return r.json(); })
+      .then(function (res) {
+        btn.disabled = false; btn.textContent = oldText;
+        if (!res.ok) { return; }
+        var d = res.data;
+        if (d) {
+          var card = btn.closest('.account-card');
+          var statLine = card.querySelector('.stat-line');
+          if (!statLine) {
+            statLine = document.createElement('div');
+            statLine.className = 'stat-line';
+            card.querySelector('.query-results-fleets').appendChild(statLine);
+          }
+          statLine.style.display = 'block';
+          statLine.textContent = '车队[' + d.fleetName + ']: 共 ' + d.total + ' 辆 | 空闲 ' + d.state10 + ' | 已派 ' + d.state20 + ' | 排队 ' + d.state30 + ' | 已发运 ' + d.state40;
+        }
+      }).catch(function (e) { btn.disabled = false; btn.textContent = oldText; });
+  }
+
+  // ========== 全局控制 ==========
+  btnStartAll.addEventListener('click', function () {
+    if (accounts.length === 0) { appendLog('请先添加账号\n', true); return; }
+    authFetch('/api/tasks/start-all', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          setStatus('运行中', 'running');
+          btnStartAll.disabled = true; btnStopAll.disabled = false;
+          startPolling();
+        } else { appendLog('启动失败: ' + res.msg + '\n', true); }
+      }).catch(function (e) { appendLog('启动失败: ' + e.message + '\n', true); });
+  });
+
+  btnStopAll.addEventListener('click', function () {
+    btnStopAll.disabled = true;  // 防重复点击
+    authFetch('/api/tasks/stop-all', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) {
+          setStatus('空闲', '');
+          btnStartAll.disabled = false;
+          appendLog('[SERVER] 停止全部指令已发送, 排队中的任务将不再启动\n');
+        } else {
+          btnStopAll.disabled = false;
+          appendLog('[ERROR] 停止失败: ' + (res.msg || '') + '\n', true);
+        }
+      }).catch(function (e) {
+        btnStopAll.disabled = false;
+        appendLog('[ERROR] 停止失败: ' + e.message + '\n', true);
+      });
+  });
+
+  $('logDateSelector').addEventListener('change', function () {
+    selectLogDate(this.value);
+  });
+
+  // ========== 初始化 ==========
+  function fetchLogDates() {
+    authFetch('/api/logs/dates')
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok && res.dates) {
+          var sel = $('logDateSelector');
+          sel.innerHTML = '<option value="live">今天 (实时)</option>';
+          res.dates.forEach(function (d) { sel.innerHTML += '<option value="' + d + '">' + d + '</option>'; });
+        }
+      }).catch(function () {});
+  }
+
+  // 同步本地账号到服务端 (服务端为空时使用)
+  function syncAccountsToServer() {
+    if (accounts.length === 0) { return Promise.resolve(); }
+    var promises = accounts.map(function (acc) {
+      return authFetch('/api/accounts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ username: acc.username || '', password: acc.password || '', smsCode: acc.smsCode || '' })
+      }).then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res.ok) { acc.id = res.accountId; }
+        }).catch(function () {});
+    });
+    return Promise.all(promises).then(function () {
+      // 同步任务
+      var taskPromises = [];
+      accounts.forEach(function (acc) {
+        (acc.tasks || []).forEach(function (task) {
+          task.accountId = acc.id;
+          task.status = 'pending';
+          task.exitCode = null;
+          taskPromises.push(
+            authFetch('/api/tasks', {
+              method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
+              body: JSON.stringify(task)
+            }).then(function (r) { return r.json(); })
+              .then(function (res) { if (res.ok) { task.id = res.taskId; } })
+              .catch(function () {})
+          );
+        });
+      });
+      return Promise.all(taskPromises);
+    }).then(function () { saveAccounts(); });
+  }
+
+  // 服务端为准合并: 本地同 id 账号保留本地密码/smsCode (服务端不回传明文)
+  function mergeServerAccounts(serverAccounts) {
+    var localById = {};
+    accounts.forEach(function (a) { localById[a.id] = a; });
+    accounts = serverAccounts.map(function (sa) {
+      var local = localById[sa.id] || {};
+      var tasks = (sa.tasks || []).map(function (st) {
+        return {
+          id: st.id, accountId: st.accountId || sa.id,
+          orderCode: st.orderCode, fleetName: st.fleetName, date: st.date,
+          maxVehicle: st.maxVehicle, dryRun: st.dryRun,
+          status: st.status, exitCode: st.exitCode,
+          resultSummary: st.resultSummary || ''
+        };
+      });
+      return {
+        id: sa.id,
+        username: sa.username || '',
+        password: local.password || '',
+        smsCode: local.smsCode || '',
+        passwordSet: sa.passwordSet,
+        hasCookie: sa.hasCookie,
+        tasks: tasks
+      };
+    });
+    saveAccounts();
+  }
+
+  function refreshFromServer() {
+    return authFetch('/api/status')
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok && res.accounts) { mergeServerAccounts(res.accounts); }
+      }).catch(function () {});
+  }
+
+  function applyServerDryRun(settings) {
+    if (!settings || typeof settings.globalDryRun !== 'boolean') { return; }
+    // 本地刚推送过演练开关 → 不覆盖, 防回弹
+    if (lastDryRunSentAt && (Date.now() - lastDryRunSentAt) < 1000) { return; }
+    dryRunEl.checked = settings.globalDryRun;
+    localStorage.setItem('grab_globalDryRun', settings.globalDryRun ? '1' : '0');
+  }
+
+  function initApp() {
+    fetchLogDates();
+    authFetch('/api/status')
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        setStatus('空闲', '');
+        if (res.accounts && res.accounts.length > 0) {
+          // 服务端有状态: 以服务端为准
+          mergeServerAccounts(res.accounts);
+          renderAllAccounts();
+        } else if (accounts.length > 0) {
+          // 服务端为空 + 本地有: 上推后拉回服务端 canonical 状态
+          syncAccountsToServer().then(function () { return refreshFromServer(); })
+            .then(function () { renderAllAccounts(); });
+        } else {
+          renderAllAccounts();
+        }
+        applyServerDryRun(res.settings);
+        startPolling();
+      })
+      .catch(function () {
+        setStatus('服务未运行', 'fail');
+        appendLog('服务未启动! 请先在服务器上运行启动脚本\n', true);
+        renderAllAccounts();
+      });
+  }
+
+  // 页面入口: 已有令牌 → 验证后初始化; 否则显示登录遮罩
+  if (getToken()) {
+    authFetch('/api/auth', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) { if (res.ok) { hideAuth(); initApp(); } else { showAuth(); } })
+      .catch(function () { showAuth(); });
+  } else {
+    showAuth();
+  }
+})();
+</script>
+</body>
+</html>

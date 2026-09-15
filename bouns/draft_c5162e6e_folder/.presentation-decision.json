@@ -1,0 +1,13 @@
+{
+  "audience": "使用 Windows 电脑远程操作秦岭云商抢单控制台的同事",
+  "reader_task": "从零开始远程创建并执行抢单任务，并看懂执行结果",
+  "genre_contract": "knowledge/how-to",
+  "adapter": null,
+  "presentation_mode": "normal",
+  "visual_plan": {
+    "reason": "首次使用者需要一张流程图建立全局路径；任务状态含义用表格解释；安全提醒用 callout",
+    "blocks": [
+      {"type": "whiteboard", "min_count": 1, "purpose": "展示从打开页面到查看执行结果的完整操作链路"}
+    ]
+  }
+}
