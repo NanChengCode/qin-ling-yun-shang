@@ -361,6 +361,7 @@
   loadAccounts();
   var dryRunEl = globalDryRun;
   var dryRunDebounce = null;
+  var dryRunSyncing = null;   // 本地待确认/待同步的开关值 (null=无); 期间轮询不回弹勾选框
   if (dryRunEl) {
     var savedDry = localStorage.getItem('grab_globalDryRun');
     if (savedDry !== null) { dryRunEl.checked = savedDry === '1'; }
@@ -382,37 +383,46 @@
       var cancel = dryConfirm.cancel; hideDryConfirm();
       if (cancel) { cancel(); }
     });
-    function sendDryRunSetting() {
+    // value 显式传入, 绝不读当前勾选状态 (轮询可能已把勾选框弹回, 读它会把旧值推回服务端)
+    function sendDryRunSetting(value) {
       if (dryRunDebounce) { clearTimeout(dryRunDebounce); }
       dryRunDebounce = setTimeout(function () {
         authFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json; charset=utf-8' },
-          body: JSON.stringify({ globalDryRun: dryRunEl.checked })
-        }).then(function () {
-          lastDryRunSentAt = Date.now();
-        }).catch(function () {
-          // 推送失败: 重新拉取服务端值回弹, 保持开关与服务端一致
-          refreshFromServer().then(function () {
-            return authFetch('/api/status').then(function (r) { return r.json(); });
-          }).then(function (res) {
-            if (res.ok) { applyServerDryRun(res.settings); }
-          }).catch(function () {});
-        });
+          body: JSON.stringify({ globalDryRun: value })
+        }).then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (!res.ok) { throw new Error('set settings failed'); }
+            dryRunSyncing = null;
+            lastDryRunSentAt = Date.now();
+          })
+          .catch(function () {
+            // 推送失败: 重新拉取服务端值回弹, 保持开关与服务端一致
+            dryRunSyncing = null;
+            refreshFromServer().then(function () {
+              return authFetch('/api/status').then(function (r) { return r.json(); });
+            }).then(function (res2) {
+              if (res2.ok) { applyServerDryRun(res2.settings); }
+            }).catch(function () {});
+          });
       }, 300);
     }
     dryRunEl.addEventListener('change', function () {
       if (!this.checked) {
+        dryRunSyncing = false;   // 待确认: 从此刻起轮询不回弹勾选框
         showDryConfirm(function () {
           localStorage.setItem('grab_globalDryRun', '0');
-          sendDryRunSetting();
+          sendDryRunSetting(false);
         }, function () {
+          dryRunSyncing = null;
           dryRunEl.checked = true;
           localStorage.setItem('grab_globalDryRun', '1');
         });
       } else {
+        dryRunSyncing = true;
         localStorage.setItem('grab_globalDryRun', '1');
-        sendDryRunSetting();
+        sendDryRunSetting(true);
       }
     });
   }
@@ -1141,6 +1151,8 @@
 
   function applyServerDryRun(settings) {
     if (!settings || typeof settings.globalDryRun !== 'boolean') { return; }
+    // 本地有待确认/待同步的切换 → 不覆盖, 防勾选框回弹
+    if (dryRunSyncing !== null) { return; }
     // 本地刚推送过演练开关 → 不覆盖, 防回弹
     if (lastDryRunSentAt && (Date.now() - lastDryRunSentAt) < 1000) { return; }
     dryRunEl.checked = settings.globalDryRun;
