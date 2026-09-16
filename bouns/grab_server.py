@@ -468,7 +468,8 @@ class GrabServer:
         self._stop_requested = False  # 全局停止标志: stop_all 后阻止后续任务启动
         # ---- 远程访问: 状态持久化 / 演练开关 / 防重复启动 ----
         self.fernet = _load_or_create_secret_key()
-        self.global_dry_run = True
+        # 演练模式默认关闭 (2026-09-16 起); 已持久化的状态优先, 见 _restore_state
+        self.global_dry_run = False
         self._active_accounts = set()   # 正在执行任务的账号 (防双设备重复启动)
         self._login_locks = {}          # account_id -> Lock: 同账号并发登录串行化 (登录一次, 其余复用Cookie)
         self._save_event = threading.Event()
@@ -1082,7 +1083,9 @@ class GrabServer:
                    '--poll-timeout', '60']
         if task['max_vehicle'] > 0:
             cmd += ['--max-vehicle', str(task['max_vehicle'])]
-        if task['dry_run']:
+        # 演练模式以全局开关为准: 关闭时一律真实抢单 (任务创建时的 dry_run 标记仅在全局开启时生效)
+        use_dry = bool(task['dry_run']) and self.global_dry_run
+        if use_dry:
             cmd += ['--dry-run']
         else:
             cmd += ['--no-dry-run']

@@ -236,6 +236,16 @@
       <p style="color:#484f58;font-size:12px;margin-top:12px">令牌保存在本机浏览器中, 下次自动登录</p>
     </div>
   </div>
+  <div id="dryConfirmOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:none;align-items:center;justify-content:center">
+    <div class="card" style="width:360px;max-width:calc(100vw - 32px);text-align:center">
+      <h2 style="justify-content:center">⚠️ 关闭演练模式</h2>
+      <p id="dryConfirmMsg" style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6">确定关闭演练模式, 进行真实抢单吗?</p>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-ghost" id="btnDryConfirmCancel" style="flex:1">取消</button>
+        <button class="btn btn-stop" id="btnDryConfirmOk" style="flex:1">确认真实抢单</button>
+      </div>
+    </div>
+  </div>
 <div class="wrap">
   <header>
     <div class="logo">秦</div>
@@ -252,7 +262,7 @@
   <div class="actions" style="margin-bottom:16px">
     <button class="btn btn-ghost" id="btnAddAccount">+ 添加账号</button>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;margin-left:auto;cursor:pointer">
-      <input type="checkbox" id="globalDryRun" checked style="width:16px;height:16px;accent-color:var(--green)">
+      <input type="checkbox" id="globalDryRun" style="width:16px;height:16px;accent-color:var(--green)">
       <b style="color:var(--green-bright)">演练模式</b> (全局开关)
     </label>
   </div>
@@ -286,10 +296,10 @@
       <li>每个账号可添加多个订单任务, 点击 <b>开始全部</b> 所有账号并行抢单。</li>
       <li>添加任务时选「并行拆分」份数, 服务端自动创建多个子任务并把车队车辆均分, 各子任务互不重叠并行抢单; 登录仅消耗一次 (含验证码)。</li>
       <li>每个账号模块有独立的 <b>启动本账号</b>/<b>停止本账号</b> 按钮。</li>
-      <li>演练模式默认开启, 确认无误后取消勾选真实抢单。</li>
+      <li>演练模式默认关闭 (直接真实抢单)。首次使用请先勾选演练模式验证流程, 确认无误后再取消勾选进行真实抢单。</li>
       <li>账号与任务状态保存在服务器, 多设备实时共享; 访问令牌保存在本机浏览器。</li>
     </ul>
-    <div style="margin-top:10px;color:#484f58;font-size:12px;">UI v7 (Python) · 多账号并发 · 测试模式默认开启</div>
+    <div style="margin-top:10px;color:#484f58;font-size:12px;">UI v8 (Python) · 多账号并发 · 演练模式默认关闭</div>
   </div>
 </div><script>
 (function () {
@@ -354,13 +364,25 @@
   if (dryRunEl) {
     var savedDry = localStorage.getItem('grab_globalDryRun');
     if (savedDry !== null) { dryRunEl.checked = savedDry === '1'; }
-    dryRunEl.addEventListener('change', function () {
-      localStorage.setItem('grab_globalDryRun', this.checked ? '1' : '0');
-      if (!this.checked && !confirm('确定关闭演练模式, 进行真实抢单?')) {
-        this.checked = true;
-        localStorage.setItem('grab_globalDryRun', '1');
-        return;
-      }
+    // 关闭演练模式需二次确认; 不用原生 confirm (部分手机浏览器会禁用弹窗, 导致永远无法关闭)
+    var dryConfirm = { ok: null, cancel: null };
+    function showDryConfirm(onOk, onCancel) {
+      dryConfirm.ok = onOk; dryConfirm.cancel = onCancel;
+      $('dryConfirmOverlay').style.display = 'flex';
+    }
+    function hideDryConfirm() {
+      $('dryConfirmOverlay').style.display = 'none';
+      dryConfirm.ok = null; dryConfirm.cancel = null;
+    }
+    $('btnDryConfirmOk').addEventListener('click', function () {
+      var ok = dryConfirm.ok; hideDryConfirm();
+      if (ok) { ok(); }
+    });
+    $('btnDryConfirmCancel').addEventListener('click', function () {
+      var cancel = dryConfirm.cancel; hideDryConfirm();
+      if (cancel) { cancel(); }
+    });
+    function sendDryRunSetting() {
       if (dryRunDebounce) { clearTimeout(dryRunDebounce); }
       dryRunDebounce = setTimeout(function () {
         authFetch('/api/settings', {
@@ -369,8 +391,29 @@
           body: JSON.stringify({ globalDryRun: dryRunEl.checked })
         }).then(function () {
           lastDryRunSentAt = Date.now();
-        }).catch(function () {});
-      }, 500);
+        }).catch(function () {
+          // 推送失败: 重新拉取服务端值回弹, 保持开关与服务端一致
+          refreshFromServer().then(function () {
+            return authFetch('/api/status').then(function (r) { return r.json(); });
+          }).then(function (res) {
+            if (res.ok) { applyServerDryRun(res.settings); }
+          }).catch(function () {});
+        });
+      }, 300);
+    }
+    dryRunEl.addEventListener('change', function () {
+      if (!this.checked) {
+        showDryConfirm(function () {
+          localStorage.setItem('grab_globalDryRun', '0');
+          sendDryRunSetting();
+        }, function () {
+          dryRunEl.checked = true;
+          localStorage.setItem('grab_globalDryRun', '1');
+        });
+      } else {
+        localStorage.setItem('grab_globalDryRun', '1');
+        sendDryRunSetting();
+      }
     });
   }
 
