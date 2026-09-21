@@ -441,9 +441,16 @@
   }
 
   // ========== 日志 ==========
+  var CONSOLE_MAX_LINES = 2000;   // 控制台最多保留的行数, 防止历史日志撑爆 DOM 拖慢页面
+  var logTip = null;              // 顶部省略提示行 (超限裁剪时显示)
   function appendLog(text, isError) {
     if (!text) { return; }
     var lines = text.split(/\r?\n/);
+    // 一次性大块历史日志 (初次加载/按日期加载): 只渲染最近部分, 不全量创建 DOM 节点
+    if (consoleEl.childElementCount <= 1 && lines.length > CONSOLE_MAX_LINES) {
+      lines = lines.slice(lines.length - CONSOLE_MAX_LINES);
+      lines.unshift('… 更早的日志已省略 (完整日志在服务器 logs/ 目录)');
+    }
     var frag = document.createDocumentFragment();
     for (var i = 0; i < lines.length; i++) {
       if (!lines[i]) { continue; }
@@ -458,12 +465,30 @@
       frag.appendChild(div);
     }
     consoleEl.appendChild(frag);
+    // 长时间运行: 超出上限则成批移除最旧行 (保留顶部提示行)
+    if (!logTip) {
+      logTip = document.createElement('div');
+      logTip.className = 'ln-info';
+      logTip.style.color = '#d29922';
+      logTip.style.display = 'none';
+      consoleEl.insertBefore(logTip, consoleEl.firstChild);
+    }
+    var trimmed = false;
+    while (consoleEl.childElementCount > CONSOLE_MAX_LINES && consoleEl.children[1]) {
+      consoleEl.removeChild(consoleEl.children[1]);
+      trimmed = true;
+    }
+    if (trimmed) {
+      logTip.textContent = '… 更早的日志已省略 (完整日志在服务器 logs/ 目录)';
+      logTip.style.display = 'block';
+    }
     consoleEl.scrollTop = consoleEl.scrollHeight;
   }
 
   function selectLogDate(dateStr) {
     stopPolling();
     consoleEl.innerHTML = '';
+    logTip = null;
     logOffset = 0;
     if (dateStr === 'live') {
       logBadge.style.display = 'none';

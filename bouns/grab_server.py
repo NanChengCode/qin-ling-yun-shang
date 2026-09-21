@@ -461,6 +461,9 @@ class GrabServer:
         self.tasks = {}             # dict[str, Task]  (所有账号的任务汇总)
         self.accounts = {}          # dict[str, Account]  多账号管理
         self.master_log = []        # 统一日志缓冲 (所有任务汇总)
+        self.master_base = 0        # 缓冲被裁剪的起始偏移 (缓冲只保留最近 master_log_cap 字节)
+        self.master_len = 0         # 当前缓冲总字节数 (避免每次轮询 join 整个缓冲)
+        self.master_log_cap = 512 * 1024  # 内存日志缓冲上限: 防止历史日志随服务运行无限增长拖慢轮询
         self.log_dir = os.path.join(ROOT, 'logs')
         os.makedirs(self.log_dir, exist_ok=True)
         self._log_file = None       # 当天日志文件句柄
@@ -920,20 +923,25 @@ class GrabServer:
         """追加一行到统一日志(内存+文件)"""
         today = time.strftime('%Y-%m-%d')
         with self.lock:
-            # 写入内存缓冲
+            # 写入内存缓冲 (超限从头部裁剪, 前端 offset 会自愈对齐)
             self.master_log.append(line)
+            self.master_len += len(line)
+            while self.master_len > self.master_log_cap and len(self.master_log) > 1:
+                dropped = self.master_log.pop(0)
+                self.master_base += len(dropped)
+                self.master_len -= len(dropped)
             # 滚动日志文件 (跨天切换)
             if self._log_date != today:
                 if self._log_file:
                     self._log_file.close()
                 self._log_date = today
                 self._log_file = open(self._get_log_path(today), 'a', encoding='utf-8')
+                # 清理10天前的日志文件 (只在跨天时做, 不必每行都扫目录)
+                self._cleanup_old_logs()
             # 写入文件
             if self._log_file:
                 self._log_file.write(line)
                 self._log_file.flush()
-            # 清理10天前的日志文件
-            self._cleanup_old_logs()
 
     def _cleanup_old_logs(self):
         """删除10天前的日志文件"""
@@ -949,9 +957,13 @@ class GrabServer:
     def get_master_log(self, since):
         """获取统一日志增量, 返回 (text, total)"""
         with self.lock:
+            total = self.master_base + self.master_len
+            if since >= total:
+                # 无新日志 (最常见): 不 join 整个缓冲
+                return '', total
             text = ''.join(self.master_log)
-            total = len(text)
-            new_text = text[since:total] if since < total else ''
+            local_since = max(0, since - self.master_base)
+            new_text = text[local_since:] if local_since < len(text) else ''
             return new_text, total
 
     def get_log_dates(self):
