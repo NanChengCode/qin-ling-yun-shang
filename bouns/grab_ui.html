@@ -284,6 +284,7 @@
         <option value="live">今天 (实时)</option>
       </select>
       <span class="log-badge" id="logBadge" style="display:none"></span>
+      <button id="btnBackLive" class="btn-mini" style="display:none">回到实时</button>
     </div>
     <div class="console" id="console">等待任务启动, 日志将实时显示在这里...
 提示: 请先添加账号, 填写订单和车队后点击"开始全部"。</div>
@@ -296,10 +297,11 @@
       <li>每个账号可添加多个订单任务, 点击 <b>开始全部</b> 所有账号并行抢单。</li>
       <li>添加任务时选「并行拆分」份数, 服务端自动创建多个子任务并把车队车辆均分, 各子任务互不重叠并行抢单; 登录仅消耗一次 (含验证码)。</li>
       <li>每个账号模块有独立的 <b>启动本账号</b>/<b>停止本账号</b> 按钮。</li>
+      <li>实时控制台按轮次显示: 新一轮抢单开始时自动清空, 只显示本次轮次; 任务行的 <b>日志</b> 按钮可在控制台查看单个任务的完整日志 (运行中实时尾随)。</li>
       <li>演练模式默认关闭 (直接真实抢单)。首次使用请先勾选演练模式验证流程, 确认无误后再取消勾选进行真实抢单。</li>
       <li>账号与任务状态保存在服务器, 多设备实时共享; 访问令牌保存在本机浏览器。</li>
     </ul>
-    <div style="margin-top:10px;color:#484f58;font-size:12px;">UI v8 (Python) · 多账号并发 · 演练模式默认关闭</div>
+    <div style="margin-top:10px;color:#484f58;font-size:12px;">UI v9 (Python) · 多账号并发 · 演练模式默认关闭 · 实时日志按轮次</div>
   </div>
 </div><script>
 (function () {
@@ -307,12 +309,16 @@
   var consoleEl = $('console');
   var pillEl = $('statusPill');
   var logBadge = $('logBadge');
+  var btnBackLive = $('btnBackLive');
   var btnStartAll = $('btnStartAll');
   var btnStopAll = $('btnStopAll');
   var accounts = [];
   var logOffset = 0;
   var pollTimer = null;
   var logPollTimer = null;
+  var taskLogPollTimer = null;   // 任务日志模式尾随轮询
+  var taskLogMode = null;        // 任务日志模式状态 {tid, offset, done, label}
+  var lastSession = null;        // 实时会话号: 新一轮抢单开始服务端会 +1, 前端据此清空控制台
   var lastDryRunSentAt = 0;   // 最近推送演练开关的时间戳 (防轮询回弹)
   var lastStructSig = '';     // 账号/任务结构签名 (结构变化才整卡重渲染)
 
@@ -486,6 +492,8 @@
   }
 
   function selectLogDate(dateStr) {
+    exitTaskLogMode();  // 切换日志来源 (下拉/回到实时) 统一先退出任务日志模式
+    if (dateStr === '__task__') { return; }  // 任务日志选项由 enterTaskLogMode 管理
     stopPolling();
     consoleEl.innerHTML = '';
     logTip = null;
@@ -502,6 +510,75 @@
         .then(function (res) { if (res.ok) { appendLog(res.text || '(无日志)', false); } })
         .catch(function (e) { appendLog('加载失败: ' + e.message, true); });
     }
+  }
+
+  // ========== 任务日志模式: 控制台切换显示单个任务的独立日志文件 ==========
+  function findTaskById(tid) {
+    for (var i = 0; i < accounts.length; i++) {
+      var ts = accounts[i].tasks || [];
+      for (var j = 0; j < ts.length; j++) { if (ts[j].id === tid) { return ts[j]; } }
+    }
+    return null;
+  }
+
+  function setTaskLogSelectorOption(on) {
+    var sel = $('logDateSelector');
+    var opt = sel.querySelector('option[value="__task__"]');
+    if (on) {
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.value = '__task__';
+        opt.textContent = '任务日志';
+        sel.appendChild(opt);
+      }
+      sel.value = '__task__';
+    } else if (opt) {
+      opt.remove();
+    }
+  }
+
+  function enterTaskLogMode(tid) {
+    var task = findTaskById(tid);
+    if (!task) { appendLog('任务不存在或已被删除, 历史日志请通过日期下拉查询\n', true); return; }
+    stopPolling();
+    taskLogMode = { tid: tid, offset: 0, done: false, label: '任务日志: ' + task.orderCode + '/' + task.fleetName };
+    consoleEl.innerHTML = '';
+    logTip = null;
+    logBadge.style.display = 'inline-block';
+    logBadge.className = 'log-badge';
+    logBadge.textContent = taskLogMode.label;
+    btnBackLive.style.display = 'inline-block';
+    setTaskLogSelectorOption(true);
+    pollTaskLog();
+  }
+
+  function pollTaskLog() {
+    if (!taskLogMode || taskLogMode.done) { return; }
+    var tid = taskLogMode.tid;
+    authFetch('/api/tasks/' + encodeURIComponent(tid) + '/log?since=' + taskLogMode.offset)
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!taskLogMode || taskLogMode.tid !== tid) { return; }  // 已退出任务日志模式
+        if (res.offset < taskLogMode.offset) { taskLogMode.offset = res.offset; }  // 偏移自愈
+        appendLog(res.text, false);
+        taskLogMode.offset = res.offset;
+        if (res.done) {
+          taskLogMode.done = true;
+          if (taskLogPollTimer) { clearInterval(taskLogPollTimer); taskLogPollTimer = null; }
+          logBadge.textContent = taskLogMode.label + (res.status === null ? ' (任务已删除)' : ' (已结束)');
+        }
+      })
+      .catch(function () {});
+    if (!taskLogMode.done && !taskLogPollTimer) {
+      taskLogPollTimer = setInterval(pollTaskLog, 1000);  // 运行中 1s 尾随
+    }
+  }
+
+  function exitTaskLogMode() {
+    taskLogMode = null;
+    if (taskLogPollTimer) { clearInterval(taskLogPollTimer); taskLogPollTimer = null; }
+    btnBackLive.style.display = 'none';
+    setTaskLogSelectorOption(false);
   }
 
   function startPolling() {
@@ -560,6 +637,13 @@
       authFetch('/api/log?since=' + logOffset)
         .then(function (r) { return r.json(); })
         .then(function (res) {
+          // 新一轮抢单开始: 服务端会话号 +1 且已清空缓冲, 前端同步清空控制台
+          if (res.session !== undefined && lastSession !== null && res.session !== lastSession) {
+            consoleEl.innerHTML = '';
+            logTip = null;
+            logOffset = 0;
+          }
+          if (res.session !== undefined) { lastSession = res.session; }
           if (res.offset < logOffset) { logOffset = res.offset; }  // 服务重启后偏移自愈
           appendLog(res.text, false);
           logOffset = res.offset;
@@ -571,6 +655,7 @@
   function stopPolling() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
+    if (taskLogPollTimer) { clearInterval(taskLogPollTimer); taskLogPollTimer = null; }
   }
 
   // ========== 账号渲染 ==========
@@ -649,7 +734,7 @@
         h += '<tr class="' + rowCls + '" title="' + escAttr(t.resultSummary || '') + '">';
         h += '<td data-label="订单号">' + escHtml(t.orderCode) + '</td><td data-label="车队">' + escHtml(t.fleetName) + '</td><td data-label="日期">' + escHtml(t.date) + '</td>';
         h += '<td data-label="车辆">' + (t.maxVehicle > 0 ? t.maxVehicle : '不限') + '</td><td data-label="状态">' + escHtml(statusMap[t.status] || t.status) + '</td>';
-        h += '<td data-label="操作"><button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
+        h += '<td data-label="操作"><button class="btn-mini" data-action="task-log" data-tid="' + escAttr(t.id) + '">日志</button> <button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
         if (t.status === 'running') h += ' <button class="btn-mini" data-action="stop-task" data-tid="' + escAttr(t.id) + '">停止</button>';
         if (t.status !== 'running' && t.status !== 'pending') h += ' <button class="btn-mini" data-action="reset-task" data-tid="' + escAttr(t.id) + '">重跑</button>';
         h += '</td></tr>';
@@ -703,6 +788,9 @@
         break;
       case 'remove-task':
         removeTask(accountId, btn.getAttribute('data-tid'));
+        break;
+      case 'task-log':
+        enterTaskLogMode(btn.getAttribute('data-tid'));
         break;
       case 'stop-task':
         stopTask(accountId, btn.getAttribute('data-tid'));
@@ -860,7 +948,7 @@
       h += '<tr class="' + rowCls + '" title="' + escAttr(t.resultSummary || '') + '">';
       h += '<td>' + escHtml(t.orderCode) + '</td><td>' + escHtml(t.fleetName) + '</td><td>' + escHtml(t.date) + '</td>';
       h += '<td>' + (t.maxVehicle > 0 ? t.maxVehicle : '不限') + '</td><td>' + escHtml(statusMap[t.status] || t.status) + '</td>';
-      h += '<td><button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
+      h += '<td><button class="btn-mini" data-action="task-log" data-tid="' + escAttr(t.id) + '">日志</button> <button class="btn-mini danger" data-action="remove-task" data-tid="' + escAttr(t.id) + '">删除</button>';
       if (t.status === 'running') h += ' <button class="btn-mini" data-action="stop-task" data-tid="' + escAttr(t.id) + '">停止</button>';
       if (t.status !== 'running' && t.status !== 'pending') h += ' <button class="btn-mini" data-action="reset-task" data-tid="' + escAttr(t.id) + '">重跑</button>';
       h += '</td></tr>';
@@ -1089,6 +1177,10 @@
 
   $('logDateSelector').addEventListener('change', function () {
     selectLogDate(this.value);
+  });
+
+  btnBackLive.addEventListener('click', function () {
+    selectLogDate('live');
   });
 
   // ========== 初始化 ==========

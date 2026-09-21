@@ -453,6 +453,9 @@ def _parse_result(log_lines, exit_code, order_code, fleet_name):
             order_code, fleet_name, reason)
 
 
+TASK_LOG_TAIL_CAP = 512 * 1024  # 任务日志接口单次返回上限 (字节, 超限只取尾部)
+
+
 class GrabServer:
     """多任务管理器: 支持多账号下多个订单任务并行抢单"""
 
@@ -460,12 +463,15 @@ class GrabServer:
         self.lock = threading.Lock()
         self.tasks = {}             # dict[str, Task]  (所有账号的任务汇总)
         self.accounts = {}          # dict[str, Account]  多账号管理
-        self.master_log = []        # 统一日志缓冲 (所有任务汇总)
+        self.master_log = []        # 实时日志缓冲: 只保留当前抢单轮次 (新一轮开始时重置), 唯一消费方是 /api/log
         self.master_base = 0        # 缓冲被裁剪的起始偏移 (缓冲只保留最近 master_log_cap 字节)
         self.master_len = 0         # 当前缓冲总字节数 (避免每次轮询 join 整个缓冲)
         self.master_log_cap = 512 * 1024  # 内存日志缓冲上限: 防止历史日志随服务运行无限增长拖慢轮询
+        self.live_session = 0       # 实时会话号: 每次新一轮抢单开始 +1, 前端据此清空控制台
         self.log_dir = os.path.join(ROOT, 'logs')
         os.makedirs(self.log_dir, exist_ok=True)
+        self.task_log_dir = os.path.join(self.log_dir, 'tasks')  # 每任务独立日志落盘
+        os.makedirs(self.task_log_dir, exist_ok=True)
         self._log_file = None       # 当天日志文件句柄
         self._log_date = ''         # 当前日志日期
         self._stop_requested = False  # 全局停止标志: stop_all 后阻止后续任务启动
@@ -479,6 +485,25 @@ class GrabServer:
         self._save_thread = threading.Thread(target=self._save_loop, daemon=True)
         self._save_thread.start()
         self._restore_state()
+        # 用今日日文件尾部播种实时缓冲: 重启后新一轮开始前控制台仍能看到最近一次运行的尾部
+        try:
+            today_path = self._get_log_path(time.strftime('%Y-%m-%d'))
+            if os.path.exists(today_path):
+                size = os.path.getsize(today_path)
+                if size > 0:
+                    with open(today_path, 'r', encoding='utf-8', errors='replace') as f:
+                        f.seek(max(0, size - self.master_log_cap))
+                        for line in f.read().splitlines(keepends=True):
+                            self.master_log.append(line)
+                            self.master_len += len(line)
+                    while self.master_len > self.master_log_cap and len(self.master_log) > 1:
+                        dropped = self.master_log.pop(0)
+                        self.master_base += len(dropped)
+                        self.master_len -= len(dropped)
+        except Exception:
+            pass
+        # 启动时也清理一次过期任务日志 (跨天触发之外, 空转服务器也能清理)
+        self._cleanup_old_logs()
 
     # ---------- 状态持久化 ----------
     def _mark_dirty(self):
@@ -603,7 +628,7 @@ class GrabServer:
                     'end_time': None,
                 }
                 if status == 'stopped':
-                    self.tasks[t['id']]['log'].append('[SERVER] 服务重启, 任务已停止\n')
+                    self._append_task_log(self.tasks[t['id']], '[SERVER] 服务重启, 任务已停止\n')
                 if t.get('result_summary') and status != 'stopped':
                     self.tasks[t['id']]['result_summary'] = t['result_summary']
             st = snap.get('settings') or {}
@@ -810,6 +835,18 @@ class GrabServer:
         with self.lock:
             self._active_accounts.add(account_id)
             self._stop_requested = False  # 新一轮启动时重置全局停止标志, 避免上次停止全部残留
+            # 实时会话重置: 无运行中任务 且 本波次是唯一在途波次 → 清空缓冲开启新一轮
+            # (len==1 保证 start_all 多账号循环里只有第一个账号触发一次重置, 双击也不会重复)
+            new_session = (not any(t['status'] == 'running' for t in self.tasks.values())
+                           and len(self._active_accounts) == 1)
+            if new_session:
+                self.live_session += 1
+                self.master_log = []
+                self.master_base = 0
+                self.master_len = 0
+        if new_session:
+            # 横幅走 _append_master (自取锁), 必须在锁外发送
+            self._append_master('[SERVER] ===== 新一轮抢单开始 =====\n')
         t = threading.Thread(target=self._run_sequential, args=(account_id, pending,), daemon=True)
         t.start()
         return None
@@ -864,7 +901,7 @@ class GrabServer:
                 t = self.tasks.get(task_id)
                 if t and t['status'] == 'pending':
                     t['status'] = 'stopped'
-                    t['log'].append('[SERVER] %s\n' % reason)
+                    self._append_task_log(t, '[SERVER] %s\n' % reason)
                     self._mark_dirty()
             self._append_master(prefix + '[SERVER] %s\n' % reason)
 
@@ -880,7 +917,7 @@ class GrabServer:
                     t = self.tasks.get(task_id)
                     if t:
                         t['status'] = 'failed'
-                        t['log'].append('[SERVER] 登录失败: %s\n' % err)
+                        self._append_task_log(t, '[SERVER] 登录失败: %s\n' % err)
                         self._mark_dirty()
                 self._append_master(prefix + '[SERVER] 登录失败: %s\n' % err)
                 _done_once()
@@ -897,7 +934,7 @@ class GrabServer:
                 t = self.tasks.get(task_id)
                 if t and t['status'] == 'pending':
                     t['status'] = 'failed'
-                    t['log'].append('[SERVER] 执行异常: %s\n' % ex)
+                    self._append_task_log(t, '[SERVER] 执行异常: %s\n' % ex)
                     self._mark_dirty()
             self._append_master(prefix + '[SERVER] 执行异常: %s\n' % ex)
             _done_once()
@@ -909,7 +946,7 @@ class GrabServer:
                 if t.get('account_id') == account_id and t['status'] == 'running' and t['runner']:
                     t['runner'].kill()
                     t['status'] = 'stopped'
-                    t['log'].append('[SERVER] 任务已被手动停止\n')
+                    self._append_task_log(t, '[SERVER] 任务已被手动停止\n')
             self._mark_dirty()
         log('已停止账号 [%s] 的所有任务' % self.accounts.get(account_id, {}).get('username', account_id))
 
@@ -944,27 +981,43 @@ class GrabServer:
                 self._log_file.flush()
 
     def _cleanup_old_logs(self):
-        """删除10天前的日志文件"""
+        """删除10天前的日志文件 (每日文件 + 任务日志)"""
         try:
             import glob
             cutoff = time.time() - 10 * 86400
             for f in glob.glob(os.path.join(self.log_dir, '*.log')):
                 if os.path.getmtime(f) < cutoff:
                     os.remove(f)
+            for f in glob.glob(os.path.join(self.task_log_dir, '*.log')):
+                if os.path.getmtime(f) < cutoff:
+                    os.remove(f)
+        except Exception:
+            pass
+
+    def _task_log_path(self, task_id):
+        return os.path.join(self.task_log_dir, task_id + '.log')
+
+    def _append_task_log(self, task, line):
+        """追加任务日志: 内存 + 独立文件逐行落盘 (调用方必须已持有 self.lock, 与 _build_snapshot 同约定)
+        逐行 open-append-close: 写后即 flush, 进程被杀不丢行; 无 fd 生命周期管理"""
+        task['log'].append(line)
+        try:
+            with open(self._task_log_path(task['id']), 'a', encoding='utf-8') as f:
+                f.write(line)
         except Exception:
             pass
 
     def get_master_log(self, since):
-        """获取统一日志增量, 返回 (text, total)"""
+        """获取统一日志增量, 返回 (text, total, session)"""
         with self.lock:
             total = self.master_base + self.master_len
             if since >= total:
                 # 无新日志 (最常见): 不 join 整个缓冲
-                return '', total
+                return '', total, self.live_session
             text = ''.join(self.master_log)
             local_since = max(0, since - self.master_base)
             new_text = text[local_since:] if local_since < len(text) else ''
-            return new_text, total
+            return new_text, total, self.live_session
 
     def get_log_dates(self):
         """获取可用的日志日期列表 (最近10天)"""
@@ -1017,7 +1070,7 @@ class GrabServer:
             with self.lock:
                 t = self.tasks.get(task_id)
                 if t:
-                    t['log'].append(line)
+                    self._append_task_log(t, line)
             # 会话失效自愈: 共享Cookie过期时清除缓存, 后续任务重新登录 (避免坏Cookie连环失败)
             if '登录已失效' in line:
                 self.clear_account_cookie(task['account_id'])
@@ -1037,7 +1090,7 @@ class GrabServer:
                     t['runner'] = None
                     summary = _parse_result(t['log'], exit_code, t['order_code'], t['fleet_name'])
                     t['result_summary'] = summary
-                    t['log'].append(summary + '\n')
+                    self._append_task_log(t, summary + '\n')
                     self._mark_dirty()
             # 结果写入统一日志 (锁外操作)
             self._append_master(prefix + summary + '\n')
@@ -1052,7 +1105,7 @@ class GrabServer:
             t = self.tasks.get(task_id)
             if err:
                 if t:
-                    t['log'].append('[SERVER] 启动失败: %s\n' % err)
+                    self._append_task_log(t, '[SERVER] 启动失败: %s\n' % err)
                     t['status'] = 'failed'
             if t and not err:
                 t['runner'] = runner
@@ -1063,7 +1116,7 @@ class GrabServer:
                         t['order_code'], t['fleet_name'], share_index + 1, share_total)
                 else:
                     start_msg = '[SERVER] 任务已启动 (订单=%s, 车队=%s)\n' % (t['order_code'], t['fleet_name'])
-                t['log'].append(start_msg)
+                self._append_task_log(t, start_msg)
             if t:
                 self._mark_dirty()
         # 写入统一日志 (锁外操作, 避免死锁)
@@ -1114,7 +1167,7 @@ class GrabServer:
                 if task['status'] == 'running' and task['runner']:
                     task['runner'].kill()
                     task['status'] = 'stopped'
-                    task['log'].append('[SERVER] 任务已被手动停止\n')
+                    self._append_task_log(task, '[SERVER] 任务已被手动停止\n')
                     prefix = '[%s/%s] ' % (task['order_code'], task['fleet_name'])
                     stopped_msgs.append(prefix + '[SERVER] 任务已被手动停止\n')
             self._mark_dirty()
@@ -1131,7 +1184,7 @@ class GrabServer:
             if task and task['status'] == 'running' and task['runner']:
                 task['runner'].kill()
                 task['status'] = 'stopped'
-                task['log'].append('[SERVER] 任务已被手动停止\n')
+                self._append_task_log(task, '[SERVER] 任务已被手动停止\n')
                 prefix = '[%s/%s] ' % (task['order_code'], task['fleet_name'])
                 msg = prefix + '[SERVER] 任务已被手动停止\n'
                 self._mark_dirty()
@@ -1152,7 +1205,7 @@ class GrabServer:
             t.pop('result_summary', None)
             t['start_time'] = None
             t['end_time'] = None
-            t['log'].append('[SERVER] 任务已重置, 等待重新执行\n')
+            self._append_task_log(t, '[SERVER] 任务已重置, 等待重新执行\n')
             self._mark_dirty()
         log('任务已重置: %s' % task_id)
         return None
@@ -1175,7 +1228,7 @@ class GrabServer:
                 t.pop('result_summary', None)
                 t['start_time'] = None
                 t['end_time'] = None
-                t['log'].append('[SERVER] 任务已重置, 等待重新执行\n')
+                self._append_task_log(t, '[SERVER] 任务已重置, 等待重新执行\n')
                 n += 1
             if n:
                 self._mark_dirty()
@@ -1196,8 +1249,31 @@ class GrabServer:
     def get_task_log(self, task_id, since):
         with self.lock:
             task = self.tasks.get(task_id)
+            path = self._task_log_path(task_id)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = -1
+            if size >= 0:
+                # 文件存在: 按字节偏移增量读取 (客户端只会回传服务端给过的 EOF 偏移, seek 必落边界)
+                text = ''
+                if since < size:
+                    start = since
+                    if size - start > TASK_LOG_TAIL_CAP:
+                        start = size - TASK_LOG_TAIL_CAP
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                            f.seek(start)
+                            text = f.read()
+                    except OSError:
+                        pass
+                # 任务已删除时 status=None, handler 据此标记 done (文件独立于任务存在)
+                status = task['status'] if task else None
+                exit_code = task['exit_code'] if task else None
+                return text, size, status, exit_code
+            # 文件不存在 (新建任务尚未落行): 回退内存
             if not task:
-                return '', 0, 'pending', None
+                return '', 0, None, None
             text = ''.join(task['log'])
             total = len(text)
             new_text = text[since:total] if since < total else ''
@@ -1788,7 +1864,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             since = 0
         gs = self.server.grab_server
-        text, total = gs.get_master_log(since)
+        text, total, session = gs.get_master_log(since)
         # 检查是否有任务在运行
         running = any(t['status'] == 'running' for t in gs.get_all_tasks_status())
         self._send_json({
@@ -1796,6 +1872,7 @@ class Handler(BaseHTTPRequestHandler):
             'text': text,
             'offset': total,
             'running': running,
+            'session': session,
         })
 
     def _handle_log_dates(self):
@@ -1831,7 +1908,7 @@ class Handler(BaseHTTPRequestHandler):
             'offset': total,
             'status': status,
             'exitCode': exit_code,
-            'done': status in ('success', 'failed', 'stopped'),
+            'done': status is None or status in ('success', 'failed', 'stopped'),
         })
 
     def _handle_query(self, body, action):
