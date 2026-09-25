@@ -51,15 +51,27 @@ def run(args):
     # 2. 按订单号查询订单 (支持轮询)
     log('正在查询订单 [%s] ...' % args.order_code)
     q_body = ('quoteCustomerName=&locationId=&quoteCode=' + e(args.order_code) +
-              '&pageSize=10&pageNum=1&orderByColumn=&isAsc=asc')
+              '&pageSize=500&pageNum=1&orderByColumn=&isAsc=asc')
     rows = None
     poll_deadline = time.time() + args.poll_timeout if args.poll_timeout > 0 else 0
+    poll_start = time.time()
     poll_n = 0
+    next_remind = poll_start + 60  # 每分钟提醒一次, 避免误以为卡死
     while True:
         q = parse_json(sess.post_form(gc.BASE + '/busi/tms/shipment/listSupplyQuote',
                                      q_body, REF_DISPATCH), '订单查询')
         rows = q.get('rows') or []
         if rows:
+            # quoteCode 过滤可能被平台忽略: 在返回行中精确匹配订单号 (不匹配时兜底取第一行)
+            quote = None
+            for r in rows:
+                if str(r.get('quoteCode', '')) == args.order_code:
+                    quote = r
+                    break
+            if quote is None:
+                quote = rows[0]
+                log('注意: 返回 %d 行中没有精确匹配订单号, 暂取第一行 [%s]' %
+                    (len(rows), quote.get('quoteCode', '?')))
             break
         if args.poll_timeout <= 0:
             log('未找到订单号 [%s], 请确认订单号是否正确' % args.order_code)
@@ -68,12 +80,16 @@ def run(args):
             log('轮询超时(%ds), 订单 [%s] 仍未出现' % (args.poll_timeout, args.order_code))
             return 1
         poll_n += 1
-        # 高频轮询下日志节流: 前3次 + 每5秒一次, 避免刷屏
+        now = time.time()
+        # 高频轮询下日志节流: 前3次 + 每5秒一次, 避免刷屏; 附带列表total便于定位平台日切/过滤问题
         if poll_n <= 3 or poll_n % 5 == 0:
-            log('订单 [%s] 尚未出现, %ds后重试... (剩余%ds)' %
-                (args.order_code, args.poll_interval, int(poll_deadline - time.time())))
+            log('订单 [%s] 尚未出现, %ds后重试... (剩余%ds) [列表total=%s]' %
+                (args.order_code, args.poll_interval, int(poll_deadline - now), q.get('total')))
+        if now >= next_remind:
+            log('提示: 已轮询 %.0f 分钟仍未出现 (平台可能尚未放量/日切中, 任务仍在正常轮询)' %
+                ((now - poll_start) / 60.0))
+            next_remind = now + 60
         time.sleep(args.poll_interval)
-    quote = rows[0]
     quote_id = quote['id']
     loss_str = 'null' if quote.get('lossCoefficient') is None else str(quote['lossCoefficient'])
     # 剩余量直接取订单列表响应 (原单独订单详情请求为冗余, 已移除; 需要权威值时热循环内会重查)
@@ -406,8 +422,8 @@ def main():
                         help='车辆份额拆分数(>1 时本任务只抢第 share-index 份, 各份互不重叠)')
     parser.add_argument('--poll-interval', type=int, default=1,
                         help='订单轮询间隔(秒), 默认1秒')
-    parser.add_argument('--poll-timeout', type=int, default=60,
-                        help='订单轮询超时(秒), 默认60秒, 0=不轮询')
+    parser.add_argument('--poll-timeout', type=int, default=1800,
+                        help='订单轮询超时(秒), 默认1800秒(30分钟, 覆盖平台日切/放量延迟), 0=不轮询')
     parser.add_argument('--retry-interval', type=float, default=0.15,
                         help='无可派时持续轮询间隔(秒), 默认0.15秒(150ms)')
     parser.add_argument('--retry-timeout', type=int, default=900,

@@ -412,6 +412,9 @@ def _parse_result(log_lines, exit_code, order_code, fleet_name):
         if '未找到订单号' in full:
             m2 = re.search(r'未找到订单号\s*\[([^\]]+)\]', full)
             reasons.append('订单号不存在: ' + (m2.group(1) if m2 else '未知'))
+        if ('尚未出现' in full and '找到订单' not in full and '派车未成功' not in full):
+            # 本运行一直停在订单轮询阶段 (被停止/超时), 给出准确结论而非兜底未知原因
+            reasons.append('订单尚未出现, 未进入抢单阶段 (平台可能尚未放量/日切中)')
         if '未找到车队' in full:
             m3 = re.search(r'未找到车队\s*\[([^\]]+)\]', full)
             reasons.append('车队不存在: ' + (m3.group(1) if m3 else '未知'))
@@ -1111,6 +1114,8 @@ class GrabServer:
                 t['runner'] = runner
                 t['status'] = 'running'
                 t['start_time'] = time.time()
+                # 新一轮运行开始: 清空内存日志, 结果解析只看本次运行 (独立文件保留全量历史)
+                t['log'] = []
                 if share_total > 1:
                     start_msg = '[SERVER] 任务已启动 (订单=%s, 车队=%s, 车辆份额=%d/%d)\n' % (
                         t['order_code'], t['fleet_name'], share_index + 1, share_total)
@@ -1135,7 +1140,7 @@ class GrabServer:
                    '--fleet-name', task['fleet_name'],
                    '--date', task['date'],
                    '--poll-interval', '1',
-                   '--poll-timeout', '60']
+                   '--poll-timeout', '1800']  # 30分钟: 覆盖平台日切/放量延迟 (09-25 曾延迟约16分钟)
         else:
             # 未打包: python + grab_order.py
             py = sys.executable
@@ -1145,7 +1150,7 @@ class GrabServer:
                    '--fleet-name', task['fleet_name'],
                    '--date', task['date'],
                    '--poll-interval', '1',
-                   '--poll-timeout', '60']
+                   '--poll-timeout', '1800']
         if task['max_vehicle'] > 0:
             cmd += ['--max-vehicle', str(task['max_vehicle'])]
         # 演练模式以全局开关为准: 关闭时一律真实抢单 (任务创建时的 dry_run 标记仅在全局开启时生效)
@@ -1442,9 +1447,14 @@ class SSLThreadingHTTPServer(ThreadingHTTPServer):
     def get_request(self):
         sock, addr = super().get_request()
         try:
-            return self.ssl_context.wrap_socket(sock, server_side=True), addr
+            # 握手加超时: TLS 握手在主线程进行, 客户端中途悬挂(手机网络闪断)会永久
+            # 阻塞主线程导致服务不再 accept 新连接 (2026-09-25 23:55 生产卡死根因)
+            sock.settimeout(15)
+            ssock = self.ssl_context.wrap_socket(sock, server_side=True)
+            ssock.settimeout(None)  # 握手完成恢复阻塞模式, 不影响后续请求读写
+            return ssock, addr
         except (ssl.SSLError, OSError):
-            # 明文 HTTP / 端口扫描打到 HTTPS 端口: 静默关闭, 不影响服务
+            # 明文 HTTP / 端口扫描 / 握手悬挂超时: 静默关闭, 不影响服务
             try:
                 sock.close()
             except Exception:
