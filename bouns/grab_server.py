@@ -24,6 +24,7 @@ import threading
 import argparse
 import webbrowser
 import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -466,6 +467,9 @@ def _parse_result(log_lines, exit_code, order_code, fleet_name):
 
 TASK_LOG_TAIL_CAP = 512 * 1024  # 任务日志接口单次返回上限 (字节, 超限只取尾部)
 
+# 抢单结果群推送 webhook (部署时写入, root:grabtool 640; 不进 git — 仓库公开)
+GROUP_WEBHOOK_FILE = os.path.join(ROOT, 'lark', 'grab-result-webhook.url')
+
 
 class GrabServer:
     """多任务管理器: 支持多账号下多个订单任务并行抢单"""
@@ -491,6 +495,7 @@ class GrabServer:
         # 演练模式默认关闭 (2026-09-16 起); 已持久化的状态优先, 见 _restore_state
         self.global_dry_run = False
         self._active_accounts = set()   # 正在执行任务的账号 (防双设备重复启动)
+        self._wave_notified = False    # 本轮会话的抢单结果是否已推送 (每会话一次)
         self._login_locks = {}          # account_id -> Lock: 同账号并发登录串行化 (登录一次, 其余复用Cookie)
         self._save_event = threading.Event()
         self._save_thread = threading.Thread(target=self._save_loop, daemon=True)
@@ -855,6 +860,7 @@ class GrabServer:
                 self.master_log = []
                 self.master_base = 0
                 self.master_len = 0
+                self._wave_notified = False  # 新一轮会话允许再次推送结果
         if new_session:
             # 横幅走 _append_master (自取锁), 必须在锁外发送
             self._append_master('[SERVER] ===== 新一轮抢单开始 =====\n')
@@ -888,6 +894,8 @@ class GrabServer:
                     self._active_accounts.discard(account_id)
                 log('账号 [%s] 本轮任务全部结束' %
                     self.accounts.get(account_id, {}).get('username', account_id))
+                # 所有账号都结束后推送本次抢单结果到飞书群 (自然结束与停止全部都经此回调)
+                self._maybe_notify_wave_end()
 
         for task in tasks:
             share_index, share_total = shares[task['id']]
@@ -1049,6 +1057,58 @@ class GrabServer:
             with open(path, 'r', encoding='utf-8') as f:
                 return f.read()
         return ''
+
+    def _send_group_message(self, text):
+        """把消息推送到飞书群 (自定义机器人 webhook; 独立线程调用, 失败只记日志不重试)。
+        群聊推送用 webhook 而非 lark-cli: 该外部群应用机器人路线被平台挡 (230002 等), 已实测不可用"""
+        try:
+            with open(GROUP_WEBHOOK_FILE, 'r', encoding='utf-8') as f:
+                webhook = f.read().strip()
+        except OSError:
+            return  # 未配置 webhook, 静默跳过
+        if not webhook:
+            return
+        payload = json.dumps({'msg_type': 'text', 'content': {'text': text}},
+                             ensure_ascii=False).encode('utf-8')
+        try:
+            req = urllib.request.Request(webhook, data=payload,
+                                         headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode('utf-8', errors='replace')
+            compact = body.replace(' ', '')
+            if '"code":0' not in compact and '"StatusCode":0' not in compact:
+                log('抢单结果群推送失败: %s' % body[:200])
+        except Exception as ex:
+            log('抢单结果群推送异常: %s' % str(ex)[:120])
+
+    def _maybe_notify_wave_end(self):
+        """一轮抢单结束(无运行中任务)时把本次结果推送到飞书群, 每个会话仅推送一次。
+        只在任务结束回调里调用 (on_done 已写入本轮 result_summary), 服务重启的恢复不会误发"""
+        with self.lock:
+            if self._wave_notified:
+                return
+            if not self.tasks:
+                return
+            if any(t['status'] == 'running' for t in self.tasks.values()):
+                return
+            self._wave_notified = True
+            lines = []
+            for t in sorted(self.tasks.values(), key=lambda x: str(x.get('order_code', ''))):
+                st = t['status']
+                summary = (t.get('result_summary') or '').replace('[RESULT] ', '').strip()
+                if st == 'success':
+                    lines.append('✅ %s / %s → %s' % (t['order_code'], t['fleet_name'], summary or '成功'))
+                elif st in ('failed', 'stopped'):
+                    lines.append('❌ %s / %s → %s' % (t['order_code'], t['fleet_name'],
+                                                      summary or ('失败' if st == 'failed' else '已停止')))
+                else:
+                    lines.append('⏸ %s / %s → 未执行' % (t['order_code'], t['fleet_name']))
+            dry_run = self.global_dry_run
+        msg = '【抢单结果】%s' % time.strftime('%Y-%m-%d %H:%M:%S')
+        if dry_run:
+            msg += ' ⚠️演练模式(未真实提交)'
+        msg += '\n' + '\n'.join(lines)
+        threading.Thread(target=self._send_group_message, args=(msg,), daemon=True).start()
 
     def start_all(self):
         """遍历所有账号, 各自登录后并行启动任务"""

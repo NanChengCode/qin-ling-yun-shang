@@ -18,3 +18,6 @@ logs/
 # ============ IDE / 本地工具配置 ============
 .trae/
 .claude/settings.local.json
+
+# 飞书群 webhook 地址 (含敏感凭据, 仓库公开, 严禁提交)
+bouns/lark/*.url
