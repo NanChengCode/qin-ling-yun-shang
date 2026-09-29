@@ -390,18 +390,24 @@ class ProcRunner:
         except Exception:
             pass
 def _parse_result(log_lines, exit_code, order_code, fleet_name):
-    """从任务日志中提取结果摘要"""
+    """从任务日志中提取结果摘要 (持续抢单模式: 汇总所有批次的车辆数与总载重)"""
     import re
     full = ''.join(log_lines)
     if exit_code == 0:
-        # 成功: 提取车辆数和总载重
-        m1 = re.search(r'抢到车辆数[:：]\s*(\d+)\s*辆', full)
-        m2 = re.search(r'总载重[:：]\s*([\d.]+)\s*吨', full)
-        cnt = m1.group(1) if m1 else '?'
-        wgt = m2.group(1) if m2 else '?'
+        # 成功: 汇总所有批次的车辆数和总载重
+        m1 = re.findall(r'抢到车辆数[:：]\s*(\d+)\s*辆', full)
+        m2 = re.findall(r'总载重[:：]\s*([\d.]+)\s*吨', full)
+        cnt = sum(int(x) for x in m1) if m1 else '?'
+        wgt = sum(float(x) for x in m2) if m2 else '?'
         return '[RESULT] 订单 %s / 车队 %s → 抢单成功! 抢到 %s 辆车, 总载重 %s 吨' % (
             order_code, fleet_name, cnt, wgt)
     else:
+        # 被停止/中断: 若本轮已有战果, 优先汇报已抢数量 (平台分批放量, 中断时可能在等下一批)
+        pcnt = sum(int(x) for x in re.findall(r'抢到车辆数[:：]\s*(\d+)\s*辆', full))
+        if pcnt > 0:
+            pwgt = sum(float(x) for x in re.findall(r'总载重[:：]\s*([\d.]+)\s*吨', full))
+            return '[RESULT] 订单 %s / 车队 %s → 已抢到 %d 辆车 (总载重 %s 吨), 停止时仍在等待下一批放量' % (
+                order_code, fleet_name, pcnt, pwgt)
         # 失败: 提取失败原因
         reasons = []
         m = re.search(r'派车未成功[:：]\s*(.+?)(?:\n|$)', full)
@@ -415,6 +421,8 @@ def _parse_result(log_lines, exit_code, order_code, fleet_name):
         if ('尚未出现' in full and '找到订单' not in full and '派车未成功' not in full):
             # 本运行一直停在订单轮询阶段 (被停止/超时), 给出准确结论而非兜底未知原因
             reasons.append('订单尚未出现, 未进入抢单阶段 (平台可能尚未放量/日切中)')
+        if '无可抢数量' in full:
+            reasons.append('订单已无剩余发货量')
         if '未找到车队' in full:
             m3 = re.search(r'未找到车队\s*\[([^\]]+)\]', full)
             reasons.append('车队不存在: ' + (m3.group(1) if m3 else '未知'))

@@ -179,13 +179,19 @@ def run(args):
         """持续轮询等待: 睡眠 retry_interval 并做超时控制, 返回 True 继续 / False 放弃(超时)。
         纯等待函数, 不修改 candidates, 供快速提交阶段"原参数直接重试"复用"""
         nonlocal empty_retry_start, remaining, retry_count
-        # 检查总超时
+        # 检查总超时 (等待放量的两类原因不限时: 平台分批放量, 用户手动停止才结束)
         if args.retry_timeout > 0 and empty_retry_start > 0:
             elapsed = time.time() - empty_retry_start
             if elapsed >= args.retry_timeout:
-                log('>>>>> %s, 已持续重试 %.0fs 超过上限 %ds, 放弃 >>>>>' %
-                    (reason, elapsed, args.retry_timeout))
-                return False
+                if reason in ('今日可派车数为0', '剩余量不足'):
+                    log('>>>>> %s: 已持续等待 %.0f 分钟, 继续等待下一批放量 (停止任务可随时结束) >>>>>' %
+                        (reason, elapsed / 60.0))
+                    empty_retry_start = time.time()
+                    retry_count = 0
+                else:
+                    log('>>>>> %s, 已持续重试 %.0fs 超过上限 %ds, 放弃 >>>>>' %
+                        (reason, elapsed, args.retry_timeout))
+                    return False
         if empty_retry_start == 0:
             empty_retry_start = time.time()
             retry_count = 0
@@ -193,8 +199,8 @@ def run(args):
                 (reason, args.retry_interval, args.retry_timeout))
         retry_count += 1
         # 高频轮询模式下不必每次都查询网络, 直接尝试提交
-        # 仅每 20 次循环(约 3s)查询一次剩余量, 用于日志显示
-        if retry_count % 20 == 0 or retry_count == 1:
+        # 仅每 200 次循环(约 30s)查询一次剩余量, 用于日志显示与耗尽判定
+        if retry_count % 200 == 0 or retry_count == 1:
             try:
                 dj_r = parse_json(sess.post_form(gc.BASE +
                                 '/busi/tms/shipment/selectQuoteListByID?selectQuoteIds=' + str(quote_id),
@@ -207,11 +213,14 @@ def run(args):
                         pass
             except Exception as ex:
                 log('轮询查询剩余量异常: %s' % str(ex)[:80])
+        if remaining <= 0:
+            # 订单剩余发货量已耗尽: 结束等待, 由调用方按战果收尾
+            log('订单剩余发货量已为 %s 吨, 无需继续等待' % remaining)
+            return False
         elapsed = time.time() - empty_retry_start
-        if retry_count % 20 == 0 or retry_count <= 3:
-            log('  [%s] 第%d次 当前剩余 %s 吨, %.3fs 后重试... (累计 %.1fs/%ds)' %
-                (reason, retry_count, remaining, args.retry_interval,
-                 elapsed, args.retry_timeout))
+        if retry_count % 200 == 0 or retry_count <= 3:
+            log('  [%s] 第%d次 当前剩余 %s 吨, %.3fs 后重试... (累计 %.1fs)' %
+                (reason, retry_count, remaining, args.retry_interval, elapsed))
         time.sleep(args.retry_interval)
         return True
 
@@ -269,6 +278,23 @@ def run(args):
         payload = '&'.join('%s=%s' % (k, e(v)) for k, v in pairs)
         return ids, md_ids, vehicle_str, weight_sum, payload
 
+    # 持续抢单: 平台配额分批放量 (每次放一批), 抢到一批后继续等下一批,
+    # 直到订单剩余发货量耗尽或任务被手动停止 (2026-09-29 起)
+    total_vehicles = 0
+    total_weight = 0.0
+    batch_n = 0
+
+    def _end():
+        """放弃重试时的统一出口: 订单已抢完(剩余发货量为0)且有战果 → 成功收尾; 否则失败"""
+        if remaining <= 0:
+            if total_vehicles > 0:
+                log('========== 订单剩余发货量已抢完, 任务结束 ==========')
+                log('累计 %d 批, 共 %d 辆车, 总载重 %s 吨' % (batch_n, total_vehicles, total_weight))
+                log('提示: 派车单已创建(初始化状态), 请到【派车单管理】中确认/审核')
+                return 0
+            log('订单剩余发货量已为 0, 无可抢数量')
+        return 1
+
     # 6. 校验+提交 主循环 (容量不足自动缩减重试 + 无可派轮询重试; 校验通过后进入快速提交阶段)
     while True:
         attempt += 1
@@ -303,7 +329,7 @@ def run(args):
                 # 剩余量小于任何一辆车的额定载重 → 进入持续轮询
                 log('剩余量 %s吨 小于车队任何一辆车的额定载重, 无法派车' % remaining)
                 if not _do_empty_retry('剩余量不足'):
-                    return 1
+                    return _end()
                 continue
             if len(fits) < len(ids):
                 candidates = fits
@@ -320,7 +346,7 @@ def run(args):
             if len(new_cands) >= len(ids):
                 log('自动缩减后仍无法满足载重约束: %s' % cap.get('msg'))
                 if not _do_empty_retry('容量不足缩减失败'):
-                    return 1
+                    return _end()
                 continue
             log('自动缩减车辆数量: %d → %d' % (len(ids), len(new_cands)))
             candidates = new_cands
@@ -328,7 +354,7 @@ def run(args):
         if cap.get('code') != 0:
             log('容量校验异常: %s' % cap.get('msg'))
             if not _do_empty_retry('容量校验异常'):
-                return 1
+                return _end()
             continue
 
         # 校验通过: 用服务器增强后的车辆数据组装提交参数并缓存
@@ -349,16 +375,35 @@ def run(args):
                             '/busi/tms/shipment/batchAdd',
                             payload, REF_DISPATCH), '派车提交')
             if bj.get('code') == 0:
+                batch_n += 1
+                total_vehicles += len(cap_rows)
+                total_weight += weight_sum
                 log('服务器返回: %s' % bj.get('msg'))
-                log('========== 抢单成功 ==========')
-                log('账号: %s' % args.username)
-                log('订单号: %s' % args.order_code)
-                log('车队: %s' % args.fleet_name)
-                log('日期: %s' % args.date)
-                log('抢到车辆数: %d 辆' % len(cap_rows))
-                log('总载重: %s 吨' % weight_sum)
-                log('提示: 派车单已创建(初始化状态), 请到【派车单管理】中确认/审核')
-                return 0
+                log('========== 第 %d 批抢单成功 ==========' % batch_n)
+                log('本批抢到车辆数: %d 辆, 本批总载重: %s 吨' % (len(cap_rows), weight_sum))
+                log('累计: %d 辆 / %s 吨' % (total_vehicles, total_weight))
+                # 查询订单剩余发货量: 已抢完则收尾, 否则继续等下一批放量
+                try:
+                    dj3 = parse_json(sess.post_form(gc.BASE +
+                                    '/busi/tms/shipment/selectQuoteListByID?selectQuoteIds=' + str(quote_id),
+                                    '', REF_DISPATCH), '订单详情(批次后)')
+                    dj3_rows = dj3.get('rows') or []
+                    if dj3_rows:
+                        remaining = float(dj3_rows[0].get('inCompleteWeight') or 0)
+                except Exception:
+                    pass
+                log('订单剩余发货量: %s 吨' % remaining)
+                if remaining <= 0:
+                    log('========== 订单剩余发货量已抢完, 任务结束 ==========')
+                    log('累计 %d 批, 共 %d 辆车, 总载重 %s 吨' % (batch_n, total_vehicles, total_weight))
+                    log('提示: 派车单已创建(初始化状态), 请到【派车单管理】中确认/审核')
+                    return 0
+                log('等待下一批放量, 继续抢单...')
+                # 重置缩减状态与等待窗口, 回到容量校验等下一批
+                attempt = 0
+                empty_retry_start = 0
+                candidates[:] = list(vehicles)
+                continue
 
             fail_msg = str(bj.get('msg'))
             log('派车未成功: %s' % fail_msg)
@@ -372,7 +417,7 @@ def run(args):
                     # 今日已无可派数量 → 进入持续轮询, 等待配额刷新 (跳出快速提交, 重走容量校验)
                     log('今日已无可派数量, 等待配额刷新...')
                     if not _do_empty_retry('今日可派车数为0'):
-                        return 1
+                        return _end()
                     break
                 if avail < len(cap_rows):
                     log('调整为最多 %d 辆后重新提交...' % avail)
@@ -381,7 +426,7 @@ def run(args):
                     continue
                 log('可派余量 %d 不小于当前车辆数, 但提交仍失败, 进入轮询重试' % avail)
                 if not _do_empty_retry('提交失败(余量充足但被拒)'):
-                    return 1
+                    return _end()
                 break
             # 无法识别失败原因: 先按原参数快速重试几次(瞬时故障常自愈), 连续失败则回退容量校验,
             # 按实时剩余量重新缩减 — 防止剩余量已被其他任务/账号消耗后旧参数一直撞墙
@@ -389,11 +434,11 @@ def run(args):
             if unrec_n >= 3:
                 log('连续 %d 次无法识别失败, 参数可能已过时, 回退容量校验按实时剩余量重新评估...' % unrec_n)
                 if not _do_empty_retry('失败原因: ' + fail_msg[:40]):
-                    return 1
+                    return _end()
                 break
             log('无法识别失败原因 [%s], 原参数直接重试 (%d/3)...' % (fail_msg, unrec_n))
             if not _retry_wait('失败原因: ' + fail_msg[:40]):
-                return 1
+                return _end()
             continue
 
 
