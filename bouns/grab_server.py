@@ -1058,7 +1058,7 @@ class GrabServer:
                 return f.read()
         return ''
 
-    def _send_group_message(self, payload):
+    def _send_group_message(self, text):
         """把消息推送到飞书群 (自定义机器人 webhook; 独立线程调用, 失败只记日志不重试)。
         群聊推送用 webhook 而非 lark-cli: 该外部群应用机器人路线被平台挡 (230002 等), 已实测不可用"""
         try:
@@ -1068,9 +1068,10 @@ class GrabServer:
             return  # 未配置 webhook, 静默跳过
         if not webhook:
             return
+        payload = json.dumps({'msg_type': 'text', 'content': {'text': text}},
+                             ensure_ascii=False).encode('utf-8')
         try:
-            data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-            req = urllib.request.Request(webhook, data=data,
+            req = urllib.request.Request(webhook, data=payload,
                                          headers={'Content-Type': 'application/json'})
             with urllib.request.urlopen(req, timeout=30) as resp:
                 body = resp.read().decode('utf-8', errors='replace')
@@ -1081,7 +1082,7 @@ class GrabServer:
             log('抢单结果群推送异常: %s' % str(ex)[:120])
 
     def _maybe_notify_wave_end(self):
-        """一轮抢单结束(无运行中任务)时把本次结果以卡片表格推送到飞书群, 每个会话仅推送一次。
+        """一轮抢单结束(无运行中任务)时把本次结果推送到飞书群, 每个会话仅推送一次。
         只在任务结束回调里调用 (on_done 已写入本轮 result_summary), 服务重启的恢复不会误发"""
         with self.lock:
             if self._wave_notified:
@@ -1091,65 +1092,23 @@ class GrabServer:
             if any(t['status'] == 'running' for t in self.tasks.values()):
                 return
             self._wave_notified = True
-            rows = []
+            lines = []
             for t in sorted(self.tasks.values(), key=lambda x: str(x.get('order_code', ''))):
-                summary = t.get('result_summary') or ''
-                m = re.search(r'抢到\s*([\d.]+)\s*辆车', summary)
-                w = re.search(r'总载重\s*([\d.]+)\s*吨', summary)
-                if m:
-                    # 有战果 (成功, 或停止时已抢到若干批)
-                    detail = '抢到 %s 辆车' % m.group(1)
-                    if w:
-                        detail += ', 总载重 %s 吨' % w.group(1)
-                    if '等待下一批放量' in summary:
-                        detail += ' (停止时仍在等待下一批放量)'
-                    result, color = '成功', 'green'
-                elif t['status'] in ('failed', 'stopped'):
-                    result, color = '失败', 'red'
-                    detail = summary.split('原因:', 1)[-1].strip() if '原因:' in summary else (
-                        '失败' if t['status'] == 'failed' else '已停止')
+                st = t['status']
+                summary = (t.get('result_summary') or '').replace('[RESULT] ', '').strip()
+                if st == 'success':
+                    lines.append('✅ %s / %s → %s' % (t['order_code'], t['fleet_name'], summary or '成功'))
+                elif st in ('failed', 'stopped'):
+                    lines.append('❌ %s / %s → %s' % (t['order_code'], t['fleet_name'],
+                                                      summary or ('失败' if st == 'failed' else '已停止')))
                 else:
-                    result, color, detail = '未执行', 'grey', '—'
-                rows.append({
-                    'order': t['order_code'],
-                    'fleet': t['fleet_name'],
-                    'result': [{'text': result, 'color': color}],
-                    'detail': detail,
-                })
+                    lines.append('⏸ %s / %s → 未执行' % (t['order_code'], t['fleet_name']))
             dry_run = self.global_dry_run
-        card = {
-            'schema': '2.0',
-            'config': {'width_mode': 'fill', 'summary': {'content': '抢单结果'}},
-            'header': {
-                'title': {'tag': 'plain_text', 'content': '抢单结果'},
-                'subtitle': {'tag': 'plain_text', 'content': time.strftime('%Y-%m-%d %H:%M:%S')},
-                'template': 'blue',
-            },
-            'body': {
-                'direction': 'vertical',
-                'padding': '12px 12px 20px 12px',
-                'elements': [{
-                    'tag': 'table',
-                    'columns': [
-                        {'name': 'order', 'display_name': '订单号', 'data_type': 'text'},
-                        {'name': 'fleet', 'display_name': '车队名称', 'data_type': 'text'},
-                        {'name': 'result', 'display_name': '抢单结果', 'data_type': 'options'},
-                        {'name': 'detail', 'display_name': '详细信息', 'data_type': 'text'},
-                    ],
-                    'rows': rows,
-                    'page_size': 10,
-                    'row_height': 'low',
-                }],
-            },
-        }
+        msg = '【抢单结果】%s' % time.strftime('%Y-%m-%d %H:%M:%S')
         if dry_run:
-            card['header']['text_tag_list'] = [{
-                'tag': 'text_tag',
-                'text': {'tag': 'plain_text', 'content': '演练模式'},
-                'color': 'orange',
-            }]
-        payload = {'msg_type': 'interactive', 'content': card}
-        threading.Thread(target=self._send_group_message, args=(payload,), daemon=True).start()
+            msg += ' ⚠️演练模式(未真实提交)'
+        msg += '\n' + '\n'.join(lines)
+        threading.Thread(target=self._send_group_message, args=(msg,), daemon=True).start()
 
     def start_all(self):
         """遍历所有账号, 各自登录后并行启动任务"""
